@@ -1,7 +1,17 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""Utilities for configuration."""
+"""
+配置实用工具模块。
+
+本模块提供了一组用于管理配置的工具和类，包括：
+1. 字典操作工具（合并、更新、复制等）
+2. 配置类（Config、AtomicConfig等）
+3. 可序列化类（Pickleable、PickleableDict）
+4. 可配置对象基类（Configured）
+
+这些工具和类的设计目的是为了在vectorbt库中提供统一、灵活且可序列化的配置管理方案。
+"""
 
 import inspect
 import pickle
@@ -16,20 +26,43 @@ from vectorbt.utils.docs import Documented, to_doc
 
 
 class Default:
-    """Class for wrapping default values."""
+    """
+    用于包装默认值的类。
+    提供一种明确标记值为默认值的方式。
+    """
 
     def __init__(self, value: tp.Any) -> None:
+        """
+        初始化Default对象。
+        
+        参数:
+            value: 要包装的默认值
+        """
         self.value = value
 
     def __repr__(self) -> str:
+        """返回对象的字符串表示。"""
         return "Default(" + self.value.__repr__() + ")"
 
     def __str__(self) -> str:
+        """返回对象的字符串表示。"""
         return self.__repr__()
 
 
 def resolve_dict(dct: tp.DictLikeSequence, i: tp.Optional[int] = None) -> dict:
-    """Select keyword arguments."""
+    """
+    选择并解析字典参数。
+    
+    参数:
+        dct: 字典或字典序列
+        i: 如果dct是序列，则为要选择的索引
+        
+    返回:
+        解析后的字典
+    
+    异常:
+        ValueError: 当无法解析字典时
+    """
     if dct is None:
         dct = {}
     if isinstance(dct, dict):
@@ -43,7 +76,15 @@ def resolve_dict(dct: tp.DictLikeSequence, i: tp.Optional[int] = None) -> dict:
 
 
 def get_func_kwargs(func: tp.Callable) -> dict:
-    """Get keyword arguments with defaults of a function."""
+    """
+    获取函数的关键字参数及其默认值。
+    
+    参数:
+        func: 要检查的函数
+        
+    返回:
+        包含参数名和默认值的字典
+    """
     signature = inspect.signature(func)
     return {
         k: v.default
@@ -53,7 +94,23 @@ def get_func_kwargs(func: tp.Callable) -> dict:
 
 
 def get_func_arg_names(func: tp.Callable, arg_kind: tp.Optional[tp.MaybeTuple[int]] = None) -> tp.List[str]:
-    """Get argument names of a function."""
+    """
+    获取函数的参数名称列表。
+    这个函数用于提取函数的参数名称，可以根据参数类型(arg_kind)筛选特定种类的参数。
+    参数:
+        func: 要检查的函数
+        arg_kind: 参数类型过滤器，可以是以下值:
+            - None: 返回所有普通参数（排除*args和**kwargs）
+            - 单个整数: 返回特定类型的参数
+              * 0: POSITIONAL_ONLY - 仅位置参数 (Python 3.8+中的 `/` 标记前的参数)
+              * 1: POSITIONAL_OR_KEYWORD - 普通参数 (可以通过位置或关键字传递)
+              * 2: VAR_POSITIONAL - 可变位置参数 (`*args`)
+              * 3: KEYWORD_ONLY - 仅关键字参数 (`*` 后的参数)
+              * 4: VAR_KEYWORD - 可变关键字参数 (`**kwargs`)
+            - 整数元组: 返回多种类型的参数 (例如: (2, 4) 返回 *args 和 **kwargs)
+    返回:
+        符合条件的参数名称列表
+    """
     signature = inspect.signature(func)
     if arg_kind is not None and isinstance(arg_kind, int):
         arg_kind = (arg_kind,)
@@ -69,7 +126,10 @@ def get_func_arg_names(func: tp.Callable, arg_kind: tp.Optional[tp.MaybeTuple[in
 
 
 class atomic_dict(dict):
-    """Dict that behaves like a single value when merging."""
+    """
+    原子字典类，在合并操作中被视为单个值处理的字典。
+    继承自dict但在合并时不会被递归展开。
+    """
     pass
 
 
@@ -78,9 +138,16 @@ OutConfigLikeT = tp.Union[dict, "ConfigT"]
 
 
 def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
-    """Convert any dict (apart from `atomic_dict`) to `dict`.
-
-    Set `nested` to True to convert all child dicts in recursive manner."""
+    """
+    将任何字典（除了atomic_dict）转换为普通dict。
+    
+    参数:
+        dct: 要转换的字典
+        nested: 是否递归转换所有子字典
+        
+    返回:
+        转换后的字典
+    """
     if dct is None:
         dct = {}
     if isinstance(dct, atomic_dict):
@@ -98,9 +165,17 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
 
 
 def set_dict_item(dct: dict, k: tp.Any, v: tp.Any, force: bool = False) -> None:
-    """Set dict item.
-
-    If the dict is of the type `Config`, also passes `force` keyword to override blocking flags."""
+    """
+    设置字典项。
+    
+    如果字典是Config类型，则传递force关键字以覆盖阻止标志。
+    
+    参数:
+        dct: 要设置的字典
+        k: 键
+        v: 值
+        force: 是否强制设置（忽略只读或冻结状态）
+    """
     if isinstance(dct, Config):
         dct.__setitem__(k, v, force=force)
     else:
@@ -108,15 +183,20 @@ def set_dict_item(dct: dict, k: tp.Any, v: tp.Any, force: bool = False) -> None:
 
 
 def copy_dict(dct: InConfigLikeT, copy_mode: str = 'shallow', nested: bool = True) -> OutConfigLikeT:
-    """Copy dict based on a copy mode.
-
-    The following modes are supported:
-
-    * 'shallow': Copies keys only.
-    * 'hybrid': Copies keys and values using `copy.copy`.
-    * 'deep': Copies the whole thing using `copy.deepcopy`.
-
-    Set `nested` to True to copy all child dicts in recursive manner."""
+    """
+    基于复制模式复制字典。
+    
+    参数:
+        dct: 要复制的字典
+        copy_mode: 复制模式，支持'shallow'（浅复制）、'hybrid'（混合复制）和'deep'（深复制）
+        nested: 是否递归复制所有子字典
+        
+    返回:
+        复制后的字典
+        
+    异常:
+        ValueError: 当复制模式不支持时
+    """
     if dct is None:
         dct = {}
     checks.assert_instance_of(copy_mode, str)
@@ -131,13 +211,13 @@ def copy_dict(dct: InConfigLikeT, copy_mode: str = 'shallow', nested: bool = Tru
             copy_mode=copy_mode,
             nested=nested
         )
-    dct_copy = copy(dct)  # copy structure using shallow copy
+    dct_copy = copy(dct)  # 使用浅复制来复制结构
     for k, v in dct_copy.items():
         if nested and isinstance(v, dict):
             _v = copy_dict(v, copy_mode=copy_mode, nested=nested)
         else:
             if copy_mode == 'hybrid':
-                _v = copy(v)  # copy values using shallow copy
+                _v = copy(v)  # 使用浅复制来复制值
             else:
                 _v = v
         set_dict_item(dct_copy, k, _v, force=True)
@@ -149,15 +229,20 @@ def update_dict(x: InConfigLikeT,
                 nested: bool = True,
                 force: bool = False,
                 same_keys: bool = False) -> None:
-    """Update dict with keys and values from other dict.
-
-    Set `nested` to True to update all child dicts in recursive manner.
-    For `force`, see `set_dict_item`.
-
-    If you want to treat any dict as a single value, wrap it with `atomic_dict`.
-
-    !!! note
-        If the child dict is not atomic, it will copy only its values, not its meta."""
+    """
+    用另一个字典的键和值更新字典。
+    
+    参数:
+        x: 要更新的字典
+        y: 包含更新内容的字典
+        nested: 是否递归更新所有子字典
+        force: 是否强制更新（忽略只读或冻结状态）
+        same_keys: 是否只更新已存在的键
+        
+    注意:
+        如果要将任何字典视为单个值，请用atomic_dict包装它。
+        如果子字典不是原子的，则只会复制其值，而不是其元数据。
+    """
     if x is None:
         return
     if y is None:
@@ -183,22 +268,25 @@ def merge_dicts(*dicts: InConfigLikeT,
                 copy_mode: tp.Optional[str] = 'shallow',
                 nested: bool = True,
                 same_keys: bool = False) -> OutConfigLikeT:
-    """Merge dicts.
-
-    Args:
-        *dicts (dict): Dicts.
-        to_dict (bool): Whether to call `convert_to_dict` on each dict prior to copying.
-        copy_mode (str): Mode for `copy_dict` to copy each dict prior to merging.
-
-            Pass None to not copy.
-        nested (bool): Whether to merge all child dicts in recursive manner.
-        same_keys (bool): Whether to merge on the overlapping keys only."""
-    # copy only once
+    """
+    合并多个字典。
+    
+    参数:
+        *dicts: 要合并的字典
+        to_dict: 是否在复制前将每个字典转换为dict
+        copy_mode: 复制模式，用于在合并前复制每个字典
+        nested: 是否递归合并所有子字典
+        same_keys: 是否只合并重叠的键
+        
+    返回:
+        合并后的字典
+    """
+    # 仅复制一次
     if to_dict:
         dicts = tuple([convert_to_dict(dct, nested=nested) for dct in dicts])
     if copy_mode is not None:
         if not to_dict or copy_mode != 'shallow':
-            # to_dict already does a shallow copy
+            # to_dict已经进行了浅复制
             dicts = tuple([copy_dict(dct, copy_mode=copy_mode, nested=nested) for dct in dicts])
     x, y = dicts[0], dicts[1]
     should_update = True
@@ -213,8 +301,8 @@ def merge_dicts(*dicts: InConfigLikeT,
     if len(dicts) > 2:
         return merge_dicts(
             x, *dicts[2:],
-            to_dict=False,  # executed only once
-            copy_mode=None,  # executed only once
+            to_dict=False,  # 仅执行一次
+            copy_mode=None,  # 仅执行一次
             nested=nested,
             same_keys=same_keys
         )
@@ -229,26 +317,61 @@ PickleableT = tp.TypeVar("PickleableT", bound="Pickleable")
 
 
 class Pickleable:
-    """Superclass that defines abstract properties and methods for pickle-able classes."""
+    """
+    定义可序列化类的抽象属性和方法的超类。
+    提供基本的序列化和反序列化功能。
+    """
 
     def dumps(self, **kwargs) -> bytes:
-        """Pickle to bytes."""
+        """
+        将对象序列化为字节。
+        
+        参数:
+            **kwargs: 传递给pickle.dumps的参数
+            
+        返回:
+            序列化后的字节
+        """
         return pickle.dumps(self, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
     def loads(cls: tp.Type[PickleableT], dumps: bytes, **kwargs) -> PickleableT:
-        """Unpickle from bytes."""
+        """
+        从字节反序列化对象。
+        
+        参数:
+            dumps: 序列化的字节
+            **kwargs: 传递给pickle.loads的参数
+            
+        返回:
+            反序列化后的对象
+        """
         return pickle.loads(dumps)
 
     def save(self, fname: tp.FileName, **kwargs) -> None:
-        """Save dumps to a file."""
+        """
+        将序列化的对象保存到文件。
+        
+        参数:
+            fname: 文件名
+            **kwargs: 传递给dumps方法的参数
+        """
         dumps = self.dumps(**kwargs)
         with open(fname, "wb") as f:
             f.write(dumps)
 
     @classmethod
     def load(cls: tp.Type[PickleableT], fname: tp.FileName, **kwargs) -> PickleableT:
-        """Load dumps from a file and create new instance."""
+        """
+        从文件加载序列化的对象并创建新实例。
+        
+        参数:
+            fname: 文件名
+            **kwargs: 传递给loads方法的参数
+            
+        返回:
+            反序列化后的对象
+        """
         with open(fname, "rb") as f:
             dumps = f.read()
         return cls.loads(dumps, **kwargs)
@@ -258,10 +381,23 @@ PickleableDictT = tp.TypeVar("PickleableDictT", bound="PickleableDict")
 
 
 class PickleableDict(Pickleable, dict):
-    """Dict that may contain values of type `Pickleable`."""
+    """
+    可能包含Pickleable类型值的可序列化字典。
+    为字典提供序列化和反序列化功能，同时处理内部的可序列化对象。
+    """
 
     def dumps(self, **kwargs) -> bytes:
-        """Pickle to bytes."""
+        """
+        序列化为字节。
+        
+        识别并正确处理Pickleable类型的值。
+        
+        参数:
+            **kwargs: 传递给dill.dumps的参数
+            
+        返回:
+            序列化后的字节
+        """
         dct = dict()
         for k, v in self.items():
             if isinstance(v, Pickleable):
@@ -272,7 +408,18 @@ class PickleableDict(Pickleable, dict):
 
     @classmethod
     def loads(cls: tp.Type[PickleableDictT], dumps: bytes, **kwargs) -> PickleableDictT:
-        """Unpickle from bytes."""
+        """
+        从字节反序列化。
+        
+        正确处理DumpTuple形式的可序列化对象。
+        
+        参数:
+            dumps: 序列化的字节
+            **kwargs: 传递给dill.loads的参数
+            
+        返回:
+            反序列化后的字典
+        """
         config = dill.loads(dumps, **kwargs)
         for k, v in config.items():
             if isinstance(v, DumpTuple):
@@ -280,7 +427,13 @@ class PickleableDict(Pickleable, dict):
         return cls(**config)
 
     def load_update(self, fname: tp.FileName, **kwargs) -> None:
-        """Load dumps from a file and update this instance."""
+        """
+        从文件加载序列化的字典并更新此实例。
+        
+        参数:
+            fname: 文件名
+            **kwargs: 传递给load方法的参数
+        """
         self.clear()
         self.update(self.load(fname, **kwargs))
 
@@ -289,46 +442,21 @@ ConfigT = tp.TypeVar("ConfigT", bound="Config")
 
 
 class Config(PickleableDict, Documented):
-    """Extends dict with config features such as nested updates, frozen keys/values, and pickling.
-
-    Args:
-        dct (dict): Dict to construct this config from.
-        copy_kwargs (dict): Keyword arguments passed to `copy_dict` for copying `dct` and `reset_dct`.
-
-            Copy mode defaults to 'shallow' if `readonly`, otherwise to 'hybrid'.
-        reset_dct (dict): Dict to fall back to in case of resetting.
-
-            If None, copies `dct` using `reset_dct_copy_kwargs`.
-        reset_dct_copy_kwargs (dict): Keyword arguments that override `copy_kwargs` for `reset_dct`.
-        frozen_keys (bool): Whether to deny updates to the keys of the config.
-
-            Defaults to False.
-        readonly (bool): Whether to deny updates to the keys and values of the config.
-
-            Defaults to False.
-        nested (bool): Whether to do operations recursively on each child dict.
-
-            Such operations include copy, update, and merge.
-            Disable to treat each child dict as a single value. Defaults to True.
-        convert_dicts (bool or type): Whether to convert child dicts to configs with the same configuration.
-
-            This will trigger a waterfall reaction across all child dicts.
-            Won't convert dicts that are already configs.
-            Apart from boolean, you can set it to any subclass of `Config` to use it for construction.
-            Requires `nested` to be True. Defaults to False.
-        as_attrs (bool): Whether to enable accessing dict keys via the dot notation.
-
-            Enables autocompletion (but only during runtime!).
-            Raises error in case of naming conflicts.
-            Defaults to True if `frozen` or `readonly`, otherwise False.
-
-    Defaults can be overridden with settings under `config` in `vectorbt._settings.settings`.
-
-    If another config is passed, its properties are copied over, but they can still be overridden
-    with the arguments passed to the initializer.
-
-    !!! note
-        All arguments are applied only once during initialization.
+    """
+    扩展字典，添加配置功能，如嵌套更新、冻结键/值和序列化。
+    
+    参数:
+        dct: 用于构造此配置的字典
+        copy_kwargs: 传递给copy_dict的关键字参数，用于复制dct和reset_dct
+        reset_dct: 重置时回退的字典
+        reset_dct_copy_kwargs: 覆盖copy_kwargs的关键字参数，用于reset_dct
+        frozen_keys: 是否拒绝对配置键的更新
+        readonly: 是否拒绝对配置键和值的更新
+        nested: 是否对每个子字典递归执行操作
+        convert_dicts: 是否将子字典转换为具有相同配置的配置对象
+        as_attrs: 是否启用通过点符号访问字典键
+    
+    配置可以通过vectorbt._settings.settings中的config设置来覆盖默认值。
     """
 
     _copy_kwargs_: tp.Kwargs
@@ -350,6 +478,11 @@ class Config(PickleableDict, Documented):
                  nested: tp.Optional[bool] = None,
                  convert_dicts: tp.Optional[tp.Union[bool, tp.Type["Config"]]] = None,
                  as_attrs: tp.Optional[bool] = None) -> None:
+        """
+        初始化Config对象。
+        
+        解析参数，应用默认值，并设置配置属性。
+        """
         try:
             from vectorbt._settings import settings
             configured_cfg = settings['config']
@@ -359,8 +492,9 @@ class Config(PickleableDict, Documented):
         if dct is None:
             dct = dict()
 
-        # Resolve params
+        # 解析参数
         def _resolve_param(pname: str, p: tp.Any, default: tp.Any, merge: bool = False) -> tp.Any:
+            """内部函数，用于解析参数值，考虑各种默认值来源。"""
             cfg_default = configured_cfg.get(pname, None)
             dct_p = getattr(dct, pname + '_') if isinstance(dct, Config) else None
 
@@ -400,10 +534,10 @@ class Config(PickleableDict, Documented):
             merge=True
         )
 
-        # Copy dict
+        # 复制字典
         dct = copy_dict(dict(dct), **copy_kwargs)
 
-        # Convert child dicts
+        # 转换子字典
         if convert_dicts:
             if not nested:
                 raise ValueError("convert_dicts requires nested to be True")
@@ -426,14 +560,14 @@ class Config(PickleableDict, Documented):
                         as_attrs=as_attrs
                     )
 
-        # Copy initial config
+        # 复制初始配置
         if reset_dct is None:
             reset_dct = dct
         reset_dct = copy_dict(dict(reset_dct), **reset_dct_copy_kwargs)
 
         dict.__init__(self, dct)
 
-        # Store params in an instance variable
+        # 将参数存储在实例变量中
         checks.assert_instance_of(copy_kwargs, dict)
         checks.assert_instance_of(reset_dct, dict)
         checks.assert_instance_of(reset_dct_copy_kwargs, dict)
@@ -452,7 +586,7 @@ class Config(PickleableDict, Documented):
         self.__dict__['_convert_dicts_'] = convert_dicts
         self.__dict__['_as_attrs_'] = as_attrs
 
-        # Set keys as attributes for autocomplete
+        # 将键设置为属性以实现自动完成
         if as_attrs:
             for k, v in self.items():
                 if k in self.__dir__():
@@ -461,49 +595,68 @@ class Config(PickleableDict, Documented):
 
     @property
     def copy_kwargs_(self) -> tp.Kwargs:
-        """Parameters for copying `dct`."""
+        """用于复制dct的参数。"""
         return self._copy_kwargs_
 
     @property
     def reset_dct_(self) -> dict:
-        """Dict to fall back to in case of resetting."""
+        """重置时回退的字典。"""
         return self._reset_dct_
 
     @property
     def reset_dct_copy_kwargs_(self) -> tp.Kwargs:
-        """Parameters for copying `reset_dct`."""
+        """用于复制reset_dct的参数。"""
         return self._reset_dct_copy_kwargs_
 
     @property
     def frozen_keys_(self) -> bool:
-        """Whether to deny updates to the keys and values of the config."""
+        """是否拒绝对配置键和值的更新。"""
         return self._frozen_keys_
 
     @property
     def readonly_(self) -> bool:
-        """Whether to deny any updates to the config."""
+        """是否拒绝对配置的任何更新。"""
         return self._readonly_
 
     @property
     def nested_(self) -> bool:
-        """Whether to do operations recursively on each child dict."""
+        """是否对每个子字典递归执行操作。"""
         return self._nested_
 
     @property
     def convert_dicts_(self) -> tp.Union[bool, tp.Type["Config"]]:
-        """Whether to convert child dicts to configs with the same configuration."""
+        """是否将子字典转换为具有相同配置的配置对象。"""
         return self._convert_dicts_
 
     @property
     def as_attrs_(self) -> bool:
-        """Whether to enable accessing dict keys via dot notation."""
+        """是否启用通过点符号访问字典键。"""
         return self._as_attrs_
 
     def __setattr__(self, k: str, v: tp.Any) -> None:
+        """
+        设置属性。
+        
+        如果as_attrs_为True，则将属性设置转发到__setitem__。
+        """
         if self.as_attrs_:
             self.__setitem__(k, v)
 
     def __setitem__(self, k: str, v: tp.Any, force: bool = False) -> None:
+        """
+        设置字典项。
+        
+        考虑只读和冻结键的限制。
+        
+        参数:
+            k: 键
+            v: 值
+            force: 是否强制设置（忽略只读或冻结状态）
+            
+        异常:
+            TypeError: 当配置为只读时
+            KeyError: 当配置键被冻结且键不存在时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:
@@ -514,10 +667,28 @@ class Config(PickleableDict, Documented):
             self.__dict__[k] = v
 
     def __delattr__(self, k: str) -> None:
+        """
+        删除属性。
+        
+        如果as_attrs_为True，则将删除属性转发到__delitem__。
+        """
         if self.as_attrs_:
             self.__delitem__(k)
 
     def __delitem__(self, k: str, force: bool = False) -> None:
+        """
+        删除字典项。
+        
+        考虑只读和冻结键的限制。
+        
+        参数:
+            k: 键
+            force: 是否强制删除（忽略只读或冻结状态）
+            
+        异常:
+            TypeError: 当配置为只读时
+            KeyError: 当配置键被冻结时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:
@@ -527,13 +698,32 @@ class Config(PickleableDict, Documented):
             del self.__dict__[k]
 
     def _clear_attrs(self, prior_keys: tp.Iterable[str]) -> None:
-        """Remove attributes of the removed keys given keys prior to the removal."""
+        """
+        清除已删除键的属性。
+        
+        参数:
+            prior_keys: 删除前的键列表
+        """
         if self.as_attrs_:
             for k in set(prior_keys).difference(self.keys()):
                 del self.__dict__[k]
 
     def pop(self, k: str, v: tp.Any = _RaiseKeyError, force: bool = False) -> tp.Any:
-        """Remove and return the pair by the key."""
+        """
+        删除并返回指定键的键值对。
+        
+        参数:
+            k: 键
+            v: 如果键不存在时的默认值
+            force: 是否强制操作（忽略只读或冻结状态）
+            
+        返回:
+            键对应的值
+            
+        异常:
+            TypeError: 当配置为只读时
+            KeyError: 当配置键被冻结时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:
@@ -547,7 +737,19 @@ class Config(PickleableDict, Documented):
         return result
 
     def popitem(self, force: bool = False) -> tp.Tuple[tp.Any, tp.Any]:
-        """Remove and return some pair."""
+        """
+        删除并返回某个键值对。
+        
+        参数:
+            force: 是否强制操作（忽略只读或冻结状态）
+            
+        返回:
+            键值对元组
+            
+        异常:
+            TypeError: 当配置为只读时
+            KeyError: 当配置键被冻结时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:
@@ -558,7 +760,16 @@ class Config(PickleableDict, Documented):
         return result
 
     def clear(self, force: bool = False) -> None:
-        """Remove all items."""
+        """
+        删除所有项。
+        
+        参数:
+            force: 是否强制操作（忽略只读或冻结状态）
+            
+        异常:
+            TypeError: 当配置为只读时
+            KeyError: 当配置键被冻结时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:
@@ -568,48 +779,75 @@ class Config(PickleableDict, Documented):
         self._clear_attrs(prior_keys)
 
     def update(self, *args, nested: tp.Optional[bool] = None, force: bool = False, **kwargs) -> None:
-        """Update the config.
-
-        See `update_dict`."""
+        """
+        更新配置。
+        
+        参数:
+            *args: 要更新的内容
+            nested: 是否递归更新所有子字典
+            force: 是否强制更新（忽略只读或冻结状态）
+            **kwargs: 键值对更新
+            
+        参见update_dict函数。
+        """
         other = dict(*args, **kwargs)
         if nested is None:
             nested = self.nested_
         update_dict(self, other, nested=nested, force=force)
 
     def __copy__(self: ConfigT) -> ConfigT:
-        """Shallow operation, primarily used by `copy.copy`.
-
-        Does not take into account copy parameters."""
+        """
+        浅复制操作，主要由copy.copy使用。
+        
+        不考虑复制参数。
+        
+        返回:
+            配置对象的浅复制
+        """
         cls = self.__class__
         self_copy = cls.__new__(cls)
         for k, v in self.__dict__.items():
-            if k not in self_copy:  # otherwise copies dict keys twice
+            if k not in self_copy:  # 否则会复制字典键两次
                 self_copy.__dict__[k] = v
         self_copy.clear(force=True)
         self_copy.update(copy(dict(self)), nested=False, force=True)
         return self_copy
 
     def __deepcopy__(self: ConfigT, memo: tp.DictLike = None) -> ConfigT:
-        """Deep operation, primarily used by `copy.deepcopy`.
-
-        Does not take into account copy parameters."""
+        """
+        深复制操作，主要由copy.deepcopy使用。
+        
+        不考虑复制参数。
+        
+        参数:
+            memo: 已复制对象的记忆字典
+            
+        返回:
+            配置对象的深复制
+        """
         if memo is None:
             memo = {}
         cls = self.__class__
         self_copy = cls.__new__(cls)
         memo[id(self)] = self_copy
         for k, v in self.__dict__.items():
-            if k not in self_copy:  # otherwise copies dict keys twice
+            if k not in self_copy:  # 否则会复制字典键两次
                 self_copy.__dict__[k] = deepcopy(v, memo)
         self_copy.clear(force=True)
         self_copy.update(deepcopy(dict(self), memo), nested=False, force=True)
         return self_copy
 
     def copy(self: ConfigT, reset_dct_copy_kwargs: tp.KwargsLike = None, **copy_kwargs) -> ConfigT:
-        """Copy the instance in the same way it's done during initialization.
-
-        `copy_kwargs` override `Config.copy_kwargs_` and `Config.reset_dct_copy_kwargs_` via merging.
-        `reset_dct_copy_kwargs` override merged `Config.reset_dct_copy_kwargs_`."""
+        """
+        按照初始化时的方式复制实例。
+        
+        参数:
+            reset_dct_copy_kwargs: 通过合并覆盖Config.reset_dct_copy_kwargs_的参数
+            **copy_kwargs: 通过合并覆盖Config.copy_kwargs_和Config.reset_dct_copy_kwargs_的参数
+            
+        返回:
+            配置对象的复制
+        """
         self_copy = self.__copy__()
 
         reset_dct_copy_kwargs = merge_dicts(self.reset_dct_copy_kwargs_, copy_kwargs, reset_dct_copy_kwargs)
@@ -626,21 +864,46 @@ class Config(PickleableDict, Documented):
                    other: InConfigLikeT,
                    nested: tp.Optional[bool] = None,
                    **kwargs) -> OutConfigLikeT:
-        """Merge with another dict into one single dict.
-
-        See `merge_dicts`."""
+        """
+        与另一个字典合并为一个字典。
+        
+        参数:
+            other: 要合并的另一个字典
+            nested: 是否递归合并所有子字典
+            **kwargs: 传递给merge_dicts的参数
+            
+        返回:
+            合并后的字典
+            
+        参见merge_dicts函数。
+        """
         if nested is None:
             nested = self.nested_
         return merge_dicts(self, other, nested=nested, **kwargs)
 
     def to_dict(self, nested: tp.Optional[bool] = None) -> dict:
-        """Convert to dict."""
+        """
+        转换为字典。
+        
+        参数:
+            nested: 是否递归转换所有子字典
+            
+        返回:
+            转换后的字典
+        """
         return convert_to_dict(self, nested=nested)
 
     def reset(self, force: bool = False, **reset_dct_copy_kwargs) -> None:
-        """Clears the config and updates it with the initial config.
-
-        `reset_dct_copy_kwargs` override `Config.reset_dct_copy_kwargs_`."""
+        """
+        清除配置并用初始配置更新它。
+        
+        参数:
+            force: 是否强制重置（忽略只读状态）
+            **reset_dct_copy_kwargs: 覆盖Config.reset_dct_copy_kwargs_的参数
+            
+        异常:
+            TypeError: 当配置为只读时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         reset_dct_copy_kwargs = merge_dicts(self.reset_dct_copy_kwargs_, reset_dct_copy_kwargs)
@@ -650,9 +913,16 @@ class Config(PickleableDict, Documented):
         self.__dict__['_reset_dct_'] = reset_dct
 
     def make_checkpoint(self, force: bool = False, **reset_dct_copy_kwargs) -> None:
-        """Replace `reset_dct` by the current state.
-
-        `reset_dct_copy_kwargs` override `Config.reset_dct_copy_kwargs_`."""
+        """
+        用当前状态替换reset_dct。
+        
+        参数:
+            force: 是否强制创建检查点（忽略只读状态）
+            **reset_dct_copy_kwargs: 覆盖Config.reset_dct_copy_kwargs_的参数
+            
+        异常:
+            TypeError: 当配置为只读时
+        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         reset_dct_copy_kwargs = merge_dicts(self.reset_dct_copy_kwargs_, reset_dct_copy_kwargs)
@@ -660,7 +930,15 @@ class Config(PickleableDict, Documented):
         self.__dict__['_reset_dct_'] = reset_dct
 
     def dumps(self, **kwargs) -> bytes:
-        """Pickle to bytes."""
+        """
+        序列化为字节。
+        
+        参数:
+            **kwargs: 传递给dill.dumps的参数
+            
+        返回:
+            序列化后的字节
+        """
         return dill.dumps(dict(
             dct=PickleableDict(self).dumps(**kwargs),
             copy_kwargs=self.copy_kwargs_,
@@ -675,7 +953,16 @@ class Config(PickleableDict, Documented):
 
     @classmethod
     def loads(cls: tp.Type[ConfigT], dumps: bytes, **kwargs) -> ConfigT:
-        """Unpickle from bytes."""
+        """
+        从字节反序列化。
+        
+        参数:
+            dumps: 序列化的字节
+            **kwargs: 传递给dill.loads的参数
+            
+        返回:
+            反序列化后的配置对象
+        """
         obj = dill.loads(dumps, **kwargs)
         return cls(
             dct=PickleableDict.loads(obj['dct'], **kwargs),
@@ -690,10 +977,16 @@ class Config(PickleableDict, Documented):
         )
 
     def load_update(self, fname: tp.FileName, **kwargs) -> None:
-        """Load dumps from a file and update this instance.
-
-        !!! note
-            Updates both the config properties and dictionary."""
+        """
+        从文件加载序列化的配置并更新此实例。
+        
+        参数:
+            fname: 文件名
+            **kwargs: 传递给load方法的参数
+            
+        注意:
+            同时更新配置属性和字典内容。
+        """
         loaded = self.load(fname, **kwargs)
         self.clear(force=True)
         self.__dict__.clear()
@@ -701,10 +994,28 @@ class Config(PickleableDict, Documented):
         self.update(loaded, nested=False, force=True)
 
     def __eq__(self, other: tp.Any) -> bool:
+        """
+        判断两个配置对象是否相等。
+        
+        参数:
+            other: 要比较的对象
+            
+        返回:
+            如果两个对象内容相等则为True，否则为False
+        """
         return checks.is_deep_equal(dict(self), dict(other))
 
     def to_doc(self, with_params: bool = False, **kwargs) -> str:
-        """Convert to a doc."""
+        """
+        转换为文档字符串。
+        
+        参数:
+            with_params: 是否包含参数信息
+            **kwargs: 传递给to_doc的参数
+            
+        返回:
+            文档字符串
+        """
         doc = self.__class__.__name__ + "(" + to_doc(dict(self), **kwargs) + ")"
         if with_params:
             doc += " with params " + to_doc(dict(
@@ -721,7 +1032,11 @@ class Config(PickleableDict, Documented):
 
 
 class AtomicConfig(Config, atomic_dict):
-    """Config that behaves like a single value when merging."""
+    """
+    原子配置类，在合并时被视为单个值处理的配置对象。
+    
+    继承自Config和atomic_dict，在合并操作中不会递归展开其内容。
+    """
     pass
 
 
@@ -729,19 +1044,27 @@ ConfiguredT = tp.TypeVar("ConfiguredT", bound="Configured")
 
 
 class Configured(Pickleable, Documented):
-    """Class with an initialization config.
-
-    All subclasses of `Configured` are initialized using `Config`, which makes it easier to pickle.
-
-    Settings are defined under `configured` in `vectorbt._settings.settings`.
-
-    !!! warning
-        If any attribute has been overwritten that isn't listed in `Configured.writeable_attrs`,
-        or if any `Configured.__init__` argument depends upon global defaults,
-        their values won't be copied over. Make sure to pass them explicitly to
-        make the saved & loaded / copied instance resilient to changes in globals."""
+    """
+    具有初始化配置的类。
+    
+    所有Configured的子类都使用Config进行初始化，这使得序列化更加容易。
+    
+    设置定义在vectorbt._settings.settings的configured下。
+    
+    警告:
+        如果任何不在Configured.writeable_attrs中列出的属性被覆盖，
+        或者如果任何Configured.__init__参数依赖于全局默认值，
+        它们的值将不会被复制。确保显式传递它们以使保存和加载/复制的实例
+        对全局变化具有弹性。
+    """
 
     def __init__(self, **config) -> None:
+        """
+        初始化Configured对象。
+        
+        参数:
+            **config: 初始化配置
+        """
         from vectorbt._settings import settings
         configured_cfg = settings['configured']
 
@@ -749,12 +1072,17 @@ class Configured(Pickleable, Documented):
 
     @property
     def config(self) -> Config:
-        """Initialization config."""
+        """初始化配置。"""
         return self._config
 
     @property
     def writeable_attrs(self) -> tp.Set[str]:
-        """Set of writeable attributes that will be saved/copied along with the config."""
+        """
+        可写属性集合，这些属性将与配置一起保存/复制。
+        
+        返回:
+            可写属性集合
+        """
         return {
             base_cls.writeable_attrs.__get__(self)
             for base_cls in self.__class__.__bases__
@@ -766,11 +1094,22 @@ class Configured(Pickleable, Documented):
                 nested_: tp.Optional[bool] = None,
                 cls_: tp.Optional[type] = None,
                 **new_config) -> ConfiguredT:
-        """Create a new instance by copying and (optionally) changing the config.
-
-        !!! warning
-            This operation won't return a copy of the instance but a new instance
-            initialized with the same config and writeable attributes (or their copy, depending on `copy_mode`)."""
+        """
+        通过复制和（可选）更改配置创建新实例。
+        
+        参数:
+            copy_mode_: 复制模式
+            nested_: 是否递归复制所有子字典
+            cls_: 新实例的类
+            **new_config: 要合并的新配置
+            
+        返回:
+            新实例
+            
+        警告:
+            此操作不会返回实例的副本，而是返回使用相同配置和可写属性
+            （或其副本，取决于copy_mode）初始化的新实例。
+        """
         if cls_ is None:
             cls_ = self.__class__
         new_config = self.config.merge_with(new_config, copy_mode=copy_mode_, nested=nested_)
@@ -795,13 +1134,31 @@ class Configured(Pickleable, Documented):
              copy_mode: tp.Optional[str] = 'shallow',
              nested: tp.Optional[bool] = None,
              cls: tp.Optional[type] = None) -> ConfiguredT:
-        """Create a new instance by copying the config.
-
-        See `Configured.replace`."""
+        """
+        通过复制配置创建新实例。
+        
+        参数:
+            copy_mode: 复制模式
+            nested: 是否递归复制所有子字典
+            cls: 新实例的类
+            
+        返回:
+            新实例
+            
+        参见Configured.replace方法。
+        """
         return self.replace(copy_mode_=copy_mode, nested_=nested, cls_=cls)
 
     def dumps(self, **kwargs) -> bytes:
-        """Pickle to bytes."""
+        """
+        序列化为字节。
+        
+        参数:
+            **kwargs: 传递给dill.dumps的参数
+            
+        返回:
+            序列化后的字节
+        """
         config_dumps = self.config.dumps(**kwargs)
         attr_dct = PickleableDict({attr: getattr(self, attr) for attr in self.writeable_attrs})
         attr_dct_dumps = attr_dct.dumps(**kwargs)
@@ -809,7 +1166,16 @@ class Configured(Pickleable, Documented):
 
     @classmethod
     def loads(cls: tp.Type[ConfiguredT], dumps: bytes, **kwargs) -> ConfiguredT:
-        """Unpickle from bytes."""
+        """
+        从字节反序列化。
+        
+        参数:
+            dumps: 序列化的字节
+            **kwargs: 传递给dill.loads的参数
+            
+        返回:
+            反序列化后的对象
+        """
         config_dumps, attr_dct_dumps = dill.loads(dumps, **kwargs)
         config = Config.loads(config_dumps, **kwargs)
         attr_dct = PickleableDict.loads(attr_dct_dumps, **kwargs)
@@ -819,7 +1185,17 @@ class Configured(Pickleable, Documented):
         return new_instance
 
     def __eq__(self, other: tp.Any) -> bool:
-        """Objects are equal if their configs and writeable attributes are equal."""
+        """
+        判断两个对象是否相等。
+        
+        如果它们的配置和可写属性相等，则对象相等。
+        
+        参数:
+            other: 要比较的对象
+            
+        返回:
+            如果两个对象相等则为True，否则为False
+        """
         if type(self) != type(other):
             return False
         if self.writeable_attrs != other.writeable_attrs:
@@ -830,9 +1206,23 @@ class Configured(Pickleable, Documented):
         return self.config == other.config
 
     def update_config(self, *args, **kwargs) -> None:
-        """Force-update the config."""
+        """
+        强制更新配置。
+        
+        参数:
+            *args: 传递给config.update的参数
+            **kwargs: 传递给config.update的关键字参数
+        """
         self.config.update(*args, **kwargs, force=True)
 
     def to_doc(self, **kwargs) -> str:
-        """Convert to a doc."""
+        """
+        转换为文档字符串。
+        
+        参数:
+            **kwargs: 传递给config.to_doc的参数
+            
+        返回:
+            文档字符串
+        """
         return self.__class__.__name__ + "(**" + self.config.to_doc(**kwargs) + ")"

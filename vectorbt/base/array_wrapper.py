@@ -1,22 +1,23 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""Class for wrapping NumPy arrays into Series/DataFrames.
+"""本模块主要用于将NumPy数组包装成Pandas的Series/DataFrames.
 
-vectorbt's functionality is based upon the ability to perform the most essential pandas operations
-using NumPy+Numba stack. One has to convert the Series/DataFrame into the NumPy format, perform
-the computation, and put the array back into the pandas format. The last step is done using
-`ArrayWrapper`.
+vectorbt使用NumPy+Numba来执行pandas操作：
+    将Series/DataFrame转换为NumPy格式，
+    执行计算，
+    然后将数组重新转换为pandas格式。最后一步就是用`ArrayWrapper`来完成。
 
-It stores metadata of the original pandas object and offers methods `wrap` and `wrap_reduced`
-for wrapping NumPy arrays to match the stored metadata as closest as possible.
+它存储原始pandas对象的元数据，并提供`wrap`和`wrap_reduced`方法用于将NumPy数组包装，使其尽可能匹配存储的元数据.
 
+# 如下是ArrayWrapper类的使用示例代码，演示了如何创建、包装数组以及处理索引和分组
 ```pycon
 >>> import numpy as np
 >>> import pandas as pd
 >>> import vectorbt as vbt
 >>> from vectorbt.base.array_wrapper import ArrayWrapper
 
+# 创建一个ArrayWrapper对象，指定索引和列，并设置ndim为2
 >>> aw = ArrayWrapper(index=['x', 'y', 'z'], columns=['a', 'b', 'c'], ndim=2)
 >>> aw._config
 {
@@ -32,15 +33,16 @@ for wrapping NumPy arrays to match the stored metadata as closest as possible.
     'group_by': None,
     'allow_disable': True
 }
-
+# 使用随机种子生成一个3x3的随机numpy.array
 >>> np.random.seed(42)
 >>> a = np.random.uniform(size=(3, 3))
+# 使用wrap方法将numpy.array包装成DataFrame
 >>> aw.wrap(a)
           a         b         c
 x  0.374540  0.950714  0.731994
 y  0.598658  0.156019  0.155995
 z  0.058084  0.866176  0.601115
-
+# 使用wrap_reduced方法将numpy.array包装成Series
 >>> aw.wrap_reduced(np.sum(a, axis=0))
 a    1.031282
 b    1.972909
@@ -48,8 +50,7 @@ c    1.489103
 dtype: float64
 ```
 
-It can also be indexed as a regular pandas object and integrates `vectorbt.base.column_grouper.ColumnGrouper`:
-
+# ArrayWrapper可以像常规的pandas对象一样进行索引，并集成了`vectorbt.base.column_grouper.ColumnGrouper`：
 ```pycon
 >>> aw.loc['x':'y', 'a']._config
 {
@@ -66,6 +67,7 @@ It can also be indexed as a regular pandas object and integrates `vectorbt.base.
     'allow_disable': True
 }
 
+# 如下示例展示了索引和重分组功能
 >>> aw.regroup(np.array([0, 0, 1]))._config
 {
     'columns': Index(['a', 'b', 'c'], dtype='object'),
@@ -82,8 +84,9 @@ It can also be indexed as a regular pandas object and integrates `vectorbt.base.
 }
 ```
 
-Class `Wrapping` is a convenience class meant to be subclassed by classes that do not want to subclass
-`ArrayWrapper` but rather use it as an attribute (which is a better SE design pattern anyway!)."""
+# 类`Wrapping`是一个便利基类，供那些选择通过属性（而非直接继承）来使用`ArrayWrapper`的类继承。
+# 这种组合模式本身即是一种更优的软件工程设计
+"""
 
 import warnings
 

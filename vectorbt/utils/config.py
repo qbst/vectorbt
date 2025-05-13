@@ -143,6 +143,9 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
     
     参数:
         dct: 要转换的字典
+            None
+            dict——>atomic_dict
+                ——>Config
         nested: 是否递归转换所有子字典
         
     返回:
@@ -153,7 +156,9 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
     if isinstance(dct, atomic_dict):
         dct = atomic_dict(dct)
     else:
-        dct = dict(dct)
+        # 注意当dct是ConfigT类型时，转换后dct是dict类型
+        # 由于ConfigT是字典类，该操作会将原dct的所有顶级键值对复制过去
+        dct = dict(dct) 
     if not nested:
         return dct
     for k, v in dct.items():

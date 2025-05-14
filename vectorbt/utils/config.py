@@ -157,7 +157,7 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
         dct = atomic_dict(dct)
     else:
         # 注意当dct是ConfigT类型时，转换后dct是dict类型
-        # 由于ConfigT是字典类，该操作会将原dct的所有顶级键值对复制过去
+        # 由于ConfigT是字典类，该操作会将原dct的所有顶级键值对dct.items()复制过去
         dct = dict(dct) 
     if not nested:
         return dct
@@ -211,20 +211,36 @@ def copy_dict(dct: InConfigLikeT, copy_mode: str = 'shallow', nested: bool = Tru
 
     if copy_mode == 'deep':
         return deepcopy(dct)
+    
+    # 如果 dct 是 Config 类的实例 (并且 copy_mode 不是 'deep')
     if isinstance(dct, Config):
+        # 调用 Config 实例自身的 copy 方法来进行复制
+        # Config.copy() 方法会考虑其实例特定的复制逻辑和参数
         return dct.copy(
             copy_mode=copy_mode,
             nested=nested
         )
+        
+    # 如果 dct 是普通字典 (或者其他非 Config 类型)
+    # 并且 copy_mode 不是 'deep' (例如 'shallow' 或 'hybrid')
+    # 创建 dct 的浅拷贝副本，主要复制顶层结构
     dct_copy = copy(dct)  # 使用浅复制来复制结构
     for k, v in dct_copy.items():
+        # 如果 nested 为 True 且当前值 v 是一个字典类型
         if nested and isinstance(v, dict):
+            # 递归调用 copy_dict 来复制这个嵌套字典 v
             _v = copy_dict(v, copy_mode=copy_mode, nested=nested)
         else:
+            # 如果 nested 为 False 或者值 v 不是字典
+            # 如果复制模式是 'hybrid'
             if copy_mode == 'hybrid':
                 _v = copy(v)  # 使用浅复制来复制值
             else:
+                # 如果复制模式是 'shallow' (或其他非 'hybrid' 的情况)
+                # 直接使用原始值 v (即 _v 指向与原始字典中相同的值对象)
                 _v = v
+        # 将处理后的值 _v 设置回 dct_copy 字典中对应的键 k
+        # force=True 在这里对于普通字典的 set_dict_item 没有特殊效果，主要是为了 Config 子类兼容
         set_dict_item(dct_copy, k, _v, force=True)
     return dct_copy
 
@@ -235,7 +251,7 @@ def update_dict(x: InConfigLikeT,
                 force: bool = False,
                 same_keys: bool = False) -> None:
     """
-    用另一个字典的键和值更新字典。
+    用字典y更新字典x
     
     参数:
         x: 要更新的字典
@@ -261,8 +277,10 @@ def update_dict(x: InConfigLikeT,
                 and isinstance(x[k], dict) \
                 and isinstance(v, dict) \
                 and not isinstance(v, atomic_dict):
+        # 嵌套更新nested开启、k在x的键中、x[k]是字典、v是字典、v不是atomic_dict
             update_dict(x[k], v, force=force)
         else:
+            # 只更新已经存在的键same_keys开启、k不在x的键中
             if same_keys and k not in x:
                 continue
             set_dict_item(x, k, v, force=force)
@@ -396,7 +414,7 @@ class PickleableDict(Pickleable, dict):
     @classmethod
     def loads(cls: tp.Type[PickleableDictT], dumps: bytes, **kwargs) -> PickleableDictT:
         """
-        将字节流dumps反序列化并返回。
+        将字节流dumps反序列化并返回PickleableDictT类型的实例对象。
         
         与dumps()的'双重序列化'设计相对应，采用'双重反序列化'设计：
             先将整体进行dill反序列化（得到一个dict）
@@ -436,10 +454,10 @@ class Config(PickleableDict, Documented):
     _as_attrs_: bool
 
     def __init__(self,
-                 dct: tp.DictLike = None,   # 用于构造此配置的字典
-                 copy_kwargs: tp.KwargsLike = None,  # 传递给copy_dict的关键字参数，用于复制dct和reset_dct
-                 reset_dct: tp.DictLike = None,  # 重置时回退的字典
-                 reset_dct_copy_kwargs: tp.KwargsLike = None,  # 覆盖copy_kwargs的关键字参数，用于reset_dct
+                 dct: tp.DictLike = None,   # 构造新的Config实例的参考，可以是 None, dict, Config
+                 copy_kwargs: tp.KwargsLike = None,  # 设置如何参考dct，例如 {'copy_mode': 'shallow', 'nested': True}
+                 reset_dct: tp.DictLike = None,  # 重置Config实例时的参考，可以是 None, dict, Config
+                 reset_dct_copy_kwargs: tp.KwargsLike = None,  # 设置如何参考reset_dct
                  frozen_keys: tp.Optional[bool] = None,  # 是否拒绝对配置键的更新
                  readonly: tp.Optional[bool] = None,  # 是否拒绝对配置键和值的更新
                  nested: tp.Optional[bool] = None,  # 是否对每个子字典递归执行操作
@@ -459,9 +477,17 @@ class Config(PickleableDict, Documented):
         if dct is None:
             dct = dict()
 
-        # 解析参数
         def _resolve_param(pname: str, p: tp.Any, default: tp.Any, merge: bool = False) -> tp.Any:
-            """内部函数，用于解析参数值，考虑各种默认值来源。"""
+            '''
+            解析参数
+                cfg_default：对应于 settings['config'][pname]
+                dct_p：如果Config的__init__方法传入的dct是Config实例，那么dct_p对应于dct.pname_
+                p：Config的__init__方法传入的
+                default：传入的
+                merge：是否合并
+                
+            优先级：p > dct_p > cfg_default > default
+            '''
             cfg_default = configured_cfg.get(pname, None)
             dct_p = getattr(dct, pname + '_') if isinstance(dct, Config) else None
 
@@ -600,6 +626,10 @@ class Config(PickleableDict, Documented):
         """是否启用通过点符号访问字典键。"""
         return self._as_attrs_
 
+    # self 具有 items() 和 __dict__ 两个属性存储结构。
+    # _as_attrs_ 决定了是否支持点赋值
+    # 当实施赋值时，_readonly_ 和 _frozen_keys_ 决定了是否允许赋值。
+    # 允许赋值后，_as_attrs_ 还决定了是否更新 __dict__
     def __setattr__(self, k: str, v: tp.Any) -> None:
         """
         设置属性。
@@ -666,7 +696,7 @@ class Config(PickleableDict, Documented):
 
     def _clear_attrs(self, prior_keys: tp.Iterable[str]) -> None:
         """
-        清除已删除键的属性。
+        如果self._as_attrs_为真，删除self.__dict__[{prior_keys - self.keys()}]
         
         参数:
             prior_keys: 删除前的键列表
@@ -728,7 +758,7 @@ class Config(PickleableDict, Documented):
 
     def clear(self, force: bool = False) -> None:
         """
-        删除所有项。
+        删除 self.items() 中所有项
         
         参数:
             force: 是否强制操作（忽略只读或冻结状态）
@@ -747,7 +777,7 @@ class Config(PickleableDict, Documented):
 
     def update(self, *args, nested: tp.Optional[bool] = None, force: bool = False, **kwargs) -> None:
         """
-        更新配置。
+        用 dict(*args, **kwargs) 更新 self.items()
         
         参数:
             *args: 要更新的内容
@@ -760,6 +790,7 @@ class Config(PickleableDict, Documented):
         other = dict(*args, **kwargs)
         if nested is None:
             nested = self.nested_
+        # 用 other 更新 self.items()
         update_dict(self, other, nested=nested, force=force)
 
     def __copy__(self: ConfigT) -> ConfigT:
@@ -776,6 +807,7 @@ class Config(PickleableDict, Documented):
         for k, v in self.__dict__.items():
             if k not in self_copy:  # 否则会复制字典键两次
                 self_copy.__dict__[k] = v
+        # 删除 self_copy.items() 中所有项
         self_copy.clear(force=True)
         self_copy.update(copy(dict(self)), nested=False, force=True)
         return self_copy

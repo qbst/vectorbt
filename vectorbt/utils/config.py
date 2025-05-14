@@ -329,37 +329,21 @@ class Pickleable:
 
     def dumps(self, **kwargs) -> bytes:
         """
-        将对象序列化为字节。
-        
-        参数:
-            **kwargs: 传递给pickle.dumps的参数
-            
-        返回:
-            序列化后的字节
+        将对象self序列化为字节。
+        假设某个类A继承了Pickleable，a是A的实例，那么a.dumps()就是将a序列化为字节
         """
         return pickle.dumps(self, protocol=pickle.HIGHEST_PROTOCOL)
 
     @classmethod
     def loads(cls: tp.Type[PickleableT], dumps: bytes, **kwargs) -> PickleableT:
         """
-        从字节反序列化对象。
-        
-        参数:
-            dumps: 序列化的字节
-            **kwargs: 传递给pickle.loads的参数
-            
-        返回:
-            反序列化后的对象
+        从字节流dumps反序列化得到并返回对象。
         """
         return pickle.loads(dumps)
 
     def save(self, fname: tp.FileName, **kwargs) -> None:
         """
-        将序列化的对象保存到文件。
-        
-        参数:
-            fname: 文件名
-            **kwargs: 传递给dumps方法的参数
+        将self序列化为字节流写入到路径为fname的文件中。
         """
         dumps = self.dumps(**kwargs)
         with open(fname, "wb") as f:
@@ -368,7 +352,7 @@ class Pickleable:
     @classmethod
     def load(cls: tp.Type[PickleableT], fname: tp.FileName, **kwargs) -> PickleableT:
         """
-        从文件加载序列化的对象并创建新实例。
+        从路径为fname的文件中加载字节流，并反序列化得到并返回对象
         
         参数:
             fname: 文件名
@@ -393,37 +377,30 @@ class PickleableDict(Pickleable, dict):
 
     def dumps(self, **kwargs) -> bytes:
         """
-        序列化为字节。
+        将self.items()序列化为字节流
         
-        识别并正确处理Pickleable类型的值。
-        
-        参数:
-            **kwargs: 传递给dill.dumps的参数
-            
-        返回:
-            序列化后的字节
+        采用了'双重序列化'的设计：
+            如果self.items()中的某个键值对中的值是Pickleable类型，则将该值pickle序列化（适用于有自定义序列化要求的类型）
+            然后将整体（一个dict）dill序列化
         """
         dct = dict()
         for k, v in self.items():
             if isinstance(v, Pickleable):
-                dct[k] = DumpTuple(cls=v.__class__, dumps=v.dumps(**kwargs))
+                # k: (v.__class__, v.dumps(**kwargs))
+                dct[k] = DumpTuple(cls=v.__class__, dumps=v.dumps(**kwargs))    
             else:
-                dct[k] = v
+                # k: v
+                dct[k] = v  
         return dill.dumps(dct, **kwargs)
 
     @classmethod
     def loads(cls: tp.Type[PickleableDictT], dumps: bytes, **kwargs) -> PickleableDictT:
         """
-        从字节反序列化。
+        将字节流dumps反序列化并返回。
         
-        正确处理DumpTuple形式的可序列化对象。
-        
-        参数:
-            dumps: 序列化的字节
-            **kwargs: 传递给dill.loads的参数
-            
-        返回:
-            反序列化后的字典
+        与dumps()的'双重序列化'设计相对应，采用'双重反序列化'设计：
+            先将整体进行dill反序列化（得到一个dict）
+            如果dict的某个键值对中的值是DumpTuple类型，则将值['dumps']进行pickle反序列化
         """
         config = dill.loads(dumps, **kwargs)
         for k, v in config.items():
@@ -433,12 +410,9 @@ class PickleableDict(Pickleable, dict):
 
     def load_update(self, fname: tp.FileName, **kwargs) -> None:
         """
-        从文件加载序列化的字典并更新此实例。
-        
-        参数:
-            fname: 文件名
-            **kwargs: 传递给load方法的参数
+        从路径为fname的文件中加载字节流，然后反序列化并重置到 self.items()
         """
+        # 这里clear和update是继承的dict的方法
         self.clear()
         self.update(self.load(fname, **kwargs))
 
@@ -449,18 +423,6 @@ ConfigT = tp.TypeVar("ConfigT", bound="Config")
 class Config(PickleableDict, Documented):
     """
     扩展字典，添加配置功能，如嵌套更新、冻结键/值和序列化。
-    
-    参数:
-        dct: 用于构造此配置的字典
-        copy_kwargs: 传递给copy_dict的关键字参数，用于复制dct和reset_dct
-        reset_dct: 重置时回退的字典
-        reset_dct_copy_kwargs: 覆盖copy_kwargs的关键字参数，用于reset_dct
-        frozen_keys: 是否拒绝对配置键的更新
-        readonly: 是否拒绝对配置键和值的更新
-        nested: 是否对每个子字典递归执行操作
-        convert_dicts: 是否将子字典转换为具有相同配置的配置对象
-        as_attrs: 是否启用通过点符号访问字典键
-    
     配置可以通过vectorbt._settings.settings中的config设置来覆盖默认值。
     """
 
@@ -474,15 +436,15 @@ class Config(PickleableDict, Documented):
     _as_attrs_: bool
 
     def __init__(self,
-                 dct: tp.DictLike = None,
-                 copy_kwargs: tp.KwargsLike = None,
-                 reset_dct: tp.DictLike = None,
-                 reset_dct_copy_kwargs: tp.KwargsLike = None,
-                 frozen_keys: tp.Optional[bool] = None,
-                 readonly: tp.Optional[bool] = None,
-                 nested: tp.Optional[bool] = None,
-                 convert_dicts: tp.Optional[tp.Union[bool, tp.Type["Config"]]] = None,
-                 as_attrs: tp.Optional[bool] = None) -> None:
+                 dct: tp.DictLike = None,   # 用于构造此配置的字典
+                 copy_kwargs: tp.KwargsLike = None,  # 传递给copy_dict的关键字参数，用于复制dct和reset_dct
+                 reset_dct: tp.DictLike = None,  # 重置时回退的字典
+                 reset_dct_copy_kwargs: tp.KwargsLike = None,  # 覆盖copy_kwargs的关键字参数，用于reset_dct
+                 frozen_keys: tp.Optional[bool] = None,  # 是否拒绝对配置键的更新
+                 readonly: tp.Optional[bool] = None,  # 是否拒绝对配置键和值的更新
+                 nested: tp.Optional[bool] = None,  # 是否对每个子字典递归执行操作
+                 convert_dicts: tp.Optional[tp.Union[bool, tp.Type["Config"]]] = None,  # 是否将子字典转换为具有相同配置的配置对象
+                 as_attrs: tp.Optional[bool] = None) -> None:  # 是否启用通过点符号访问字典键
         """
         初始化Config对象。
         

@@ -139,17 +139,9 @@ OutConfigLikeT = tp.Union[dict, "ConfigT"]
 
 def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
     """
-    将任何字典（除了atomic_dict）转换为普通dict。
+    提取任何字典的普通dict类型实例（atomic_dict除外）。
     
-    参数:
-        dct: 要转换的字典
-            None
-            dict——>atomic_dict
-                ——>Config
-        nested: 是否递归转换所有子字典
-        
-    返回:
-        转换后的字典
+    对于Config类型会提取.items()
     """
     if dct is None:
         dct = {}
@@ -157,7 +149,7 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
         dct = atomic_dict(dct)
     else:
         # 注意当dct是ConfigT类型时，转换后dct是dict类型
-        # 由于ConfigT是字典类，该操作会将原dct的所有顶级键值对dct.items()复制过去
+        # 由于ConfigT是字典类，该操作会将原dct的所有顶级键值对dct.items()浅拷贝过去
         dct = dict(dct) 
     if not nested:
         return dct
@@ -171,7 +163,7 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
 
 def set_dict_item(dct: dict, k: tp.Any, v: tp.Any, force: bool = False) -> None:
     """
-    设置字典项。
+    设置字典项（比较特殊的是dct为Config类型）。
     
     如果字典是Config类型，则传递force关键字以覆盖阻止标志。
     
@@ -193,7 +185,10 @@ def copy_dict(dct: InConfigLikeT, copy_mode: str = 'shallow', nested: bool = Tru
     
     参数:
         dct: 要复制的字典
-        copy_mode: 复制模式，支持'shallow'（浅复制）、'hybrid'（混合复制）和'deep'（深复制）
+        copy_mode: 复制模式，支持
+            'shallow'： _v = v
+            'hybrid'：_v = copy(v)
+            'deep'：_v = deepcopy(v)
         nested: 是否递归复制所有子字典
         
     返回:
@@ -209,22 +204,19 @@ def copy_dict(dct: InConfigLikeT, copy_mode: str = 'shallow', nested: bool = Tru
     if copy_mode not in ['shallow', 'hybrid', 'deep']:
         raise ValueError(f"Copy mode '{copy_mode}' not supported")
 
+    # 深拷贝
     if copy_mode == 'deep':
         return deepcopy(dct)
     
     # 如果 dct 是 Config 类的实例 (并且 copy_mode 不是 'deep')
     if isinstance(dct, Config):
-        # 调用 Config 实例自身的 copy 方法来进行复制
-        # Config.copy() 方法会考虑其实例特定的复制逻辑和参数
         return dct.copy(
             copy_mode=copy_mode,
             nested=nested
         )
         
-    # 如果 dct 是普通字典 (或者其他非 Config 类型)
-    # 并且 copy_mode 不是 'deep' (例如 'shallow' 或 'hybrid')
-    # 创建 dct 的浅拷贝副本，主要复制顶层结构
-    dct_copy = copy(dct)  # 使用浅复制来复制结构
+    # 如果 dct 是普通字典并且 copy_mode 不是 'deep' (例如 'shallow' 或 'hybrid')
+    dct_copy = copy(dct) 
     for k, v in dct_copy.items():
         # 如果 nested 为 True 且当前值 v 是一个字典类型
         if nested and isinstance(v, dict):
@@ -252,17 +244,12 @@ def update_dict(x: InConfigLikeT,
                 same_keys: bool = False) -> None:
     """
     用字典y更新字典x
-    
     参数:
         x: 要更新的字典
         y: 包含更新内容的字典
         nested: 是否递归更新所有子字典
         force: 是否强制更新（忽略只读或冻结状态）
         same_keys: 是否只更新已存在的键
-        
-    注意:
-        如果要将任何字典视为单个值，请用atomic_dict包装它。
-        如果子字典不是原子的，则只会复制其值，而不是其元数据。
     """
     if x is None:
         return
@@ -777,7 +764,7 @@ class Config(PickleableDict, Documented):
 
     def update(self, *args, nested: tp.Optional[bool] = None, force: bool = False, **kwargs) -> None:
         """
-        用 dict(*args, **kwargs) 更新 self.items()
+        用 dict(*args, **kwargs) 更新 self.items() 和 self.__dict__
         
         参数:
             *args: 要更新的内容
@@ -795,34 +782,25 @@ class Config(PickleableDict, Documented):
 
     def __copy__(self: ConfigT) -> ConfigT:
         """
-        浅复制操作，主要由copy.copy使用。
-        
-        不考虑复制参数。
-        
-        返回:
-            配置对象的浅复制
+        创建一个新的和self具有相同类型的实例，
+        其 __dict__/items() 和 self.__dict__/items() 的对应键完全相同
         """
+        # Config 可能有其它子类，其它子类可能实现了 __new__
         cls = self.__class__
         self_copy = cls.__new__(cls)
         for k, v in self.__dict__.items():
-            if k not in self_copy:  # 否则会复制字典键两次
+            if k not in self_copy:  
                 self_copy.__dict__[k] = v
         # 删除 self_copy.items() 中所有项
         self_copy.clear(force=True)
+        # 用 self.items() 更新 self_copy.items()
         self_copy.update(copy(dict(self)), nested=False, force=True)
         return self_copy
 
     def __deepcopy__(self: ConfigT, memo: tp.DictLike = None) -> ConfigT:
         """
-        深复制操作，主要由copy.deepcopy使用。
-        
-        不考虑复制参数。
-        
-        参数:
-            memo: 已复制对象的记忆字典
-            
-        返回:
-            配置对象的深复制
+        创建一个新的和self具有相同类型的实例，
+        其 __dict__/items() 的键是 self.__dict__/items() 的键深拷贝得到的
         """
         if memo is None:
             memo = {}
@@ -832,7 +810,9 @@ class Config(PickleableDict, Documented):
         for k, v in self.__dict__.items():
             if k not in self_copy:  # 否则会复制字典键两次
                 self_copy.__dict__[k] = deepcopy(v, memo)
+        # 删除 self_copy.items() 中所有项
         self_copy.clear(force=True)
+        # 用 self.items() 更新 self_copy.items()
         self_copy.update(deepcopy(dict(self), memo), nested=False, force=True)
         return self_copy
 
@@ -847,14 +827,21 @@ class Config(PickleableDict, Documented):
         返回:
             配置对象的复制
         """
+        # 创建一个新的和self具有相同类型的实例，其 __dict__/items() 和 self.__dict__/items() 的对应键完全相同
         self_copy = self.__copy__()
 
+        # 合并获得_reset_dct_ 的复制参数
         reset_dct_copy_kwargs = merge_dicts(self.reset_dct_copy_kwargs_, copy_kwargs, reset_dct_copy_kwargs)
+        # 使用上一步获得的参数复制_reset_dct_
         reset_dct = copy_dict(dict(self.reset_dct_), **reset_dct_copy_kwargs)
+        # 将上一步复制得到的重新赋值给self.__dict__['_reset_dct_']
         self.__dict__['_reset_dct_'] = reset_dct
 
+        # 合并获得 self.items() 的复制参数
         copy_kwargs = merge_dicts(self.copy_kwargs_, copy_kwargs)
+        # 使用上一步获得的参数复制 self.items()
         dct = copy_dict(dict(self), **copy_kwargs)
+        # 用上一步复制得到的更新self_copy
         self_copy.update(dct, nested=False, force=True)
 
         return self_copy

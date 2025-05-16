@@ -243,7 +243,13 @@ def update_dict(x: InConfigLikeT,
                 force: bool = False,
                 same_keys: bool = False) -> None:
     """
-    用字典y更新字典x
+    将嵌套字典理解为一颗多叉树：
+    
+    用字典y.items()更新字典x.items()：
+        same_keys决定是否只更新x中存在的键
+        nested决定是否考虑嵌套字典
+        force决定是否强制更新（实际只对Config类型有效）
+    
     参数:
         x: 要更新的字典
         y: 包含更新内容的字典
@@ -467,10 +473,11 @@ class Config(PickleableDict, Documented):
         def _resolve_param(pname: str, p: tp.Any, default: tp.Any, merge: bool = False) -> tp.Any:
             '''
             解析参数
-                cfg_default：对应于 settings['config'][pname]
-                dct_p：如果Config的__init__方法传入的dct是Config实例，那么dct_p对应于dct.pname_
                 p：Config的__init__方法传入的
+                dct_p：dct.__dict__[_pname_]，if Config的__init__方法传入的dct是Config实例
+                cfg_default：settings['config'][pname]
                 default：传入的
+                
                 merge：是否合并
                 
             优先级：p > dct_p > cfg_default > default
@@ -480,6 +487,7 @@ class Config(PickleableDict, Documented):
 
             if merge and isinstance(default, dict):
                 return merge_dicts(default, cfg_default, dct_p, p)
+            # 非合并模式，直接按优先级返回
             if p is not None:
                 return p
             if dct_p is not None:
@@ -488,12 +496,15 @@ class Config(PickleableDict, Documented):
                 return cfg_default
             return default
 
+        # 相当于没操作，就是__init__传入的
         reset_dct = _resolve_param('reset_dct', reset_dct, None)
         frozen_keys = _resolve_param('frozen_keys', frozen_keys, False)
         readonly = _resolve_param('readonly', readonly, False)
         nested = _resolve_param('nested', nested, False)
         convert_dicts = _resolve_param('convert_dicts', convert_dicts, False)
         as_attrs = _resolve_param('as_attrs', as_attrs, frozen_keys or readonly)
+        # 注意 copy_kwargs 和 reset_dct_copy_kwargs 都是 Union[None, Dict[str, Any]] 类型
+        # 其中键也只可能是'copy_mode'和'nested'
         reset_dct_copy_kwargs = merge_dicts(copy_kwargs, reset_dct_copy_kwargs)
         copy_kwargs = _resolve_param(
             'copy_kwargs',
@@ -818,7 +829,9 @@ class Config(PickleableDict, Documented):
 
     def copy(self: ConfigT, reset_dct_copy_kwargs: tp.KwargsLike = None, **copy_kwargs) -> ConfigT:
         """
-        按照初始化时的方式复制实例。
+        创建一个新的和self具有相同类型的实例，其 __dict__/items() 和 self.__dict__/items() 的对应键完全相同
+        合并获得_reset_dct_ 的复制参数，并按照复制参数重新复制self._reset_dct_给self.__dict__['_reset_dct_']
+        合并获得self.items()的复制参数，并按照复制参数重新复制self.items()给self_copy.items()/__dict__
         
         参数:
             reset_dct_copy_kwargs: 通过合并覆盖Config.reset_dct_copy_kwargs_的参数

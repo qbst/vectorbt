@@ -840,21 +840,14 @@ class Config(PickleableDict, Documented):
         返回:
             配置对象的复制
         """
-        # 创建一个新的和self具有相同类型的实例，其 __dict__/items() 和 self.__dict__/items() 的对应键完全相同
         self_copy = self.__copy__()
-
-        # 合并获得_reset_dct_ 的复制参数
+        
         reset_dct_copy_kwargs = merge_dicts(self.reset_dct_copy_kwargs_, copy_kwargs, reset_dct_copy_kwargs)
-        # 使用上一步获得的参数复制_reset_dct_
         reset_dct = copy_dict(dict(self.reset_dct_), **reset_dct_copy_kwargs)
-        # 将上一步复制得到的重新赋值给self.__dict__['_reset_dct_']
         self.__dict__['_reset_dct_'] = reset_dct
 
-        # 合并获得 self.items() 的复制参数
         copy_kwargs = merge_dicts(self.copy_kwargs_, copy_kwargs)
-        # 使用上一步获得的参数复制 self.items()
         dct = copy_dict(dict(self), **copy_kwargs)
-        # 用上一步复制得到的更新self_copy
         self_copy.update(dct, nested=False, force=True)
 
         return self_copy

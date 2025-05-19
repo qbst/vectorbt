@@ -692,7 +692,7 @@ class Config(PickleableDict, Documented):
         if self.as_attrs_:
             del self.__dict__[k]
 
-    def _clear_attrs(self, prior_keys: tp.Iterable[str]) -> None:
+    def  _clear_attrs(self, prior_keys: tp.Iterable[str]) -> None:
         """
         如果self._as_attrs_为真，删除self.__dict__[{prior_keys - self.keys()}]
         

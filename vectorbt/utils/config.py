@@ -50,19 +50,6 @@ class Default:
 
 
 def resolve_dict(dct: tp.DictLikeSequence, i: tp.Optional[int] = None) -> dict:
-    """
-    选择并解析字典参数。
-    
-    参数:
-        dct: 字典或字典序列
-        i: 如果dct是序列，则为要选择的索引
-        
-    返回:
-        解析后的字典
-    
-    异常:
-        ValueError: 当无法解析字典时
-    """
     if dct is None:
         dct = {}
     if isinstance(dct, dict):
@@ -139,9 +126,8 @@ OutConfigLikeT = tp.Union[dict, "ConfigT"]
 
 def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
     """
-    提取任何字典的普通dict类型实例（atomic_dict除外）。
-    
-    对于Config类型会提取.items()
+    返回 `dct` 的子图，其中除了 atomic_dict 的 dict 类型的域都被转换成了纯 dict 类型
+    （`nested` 决定考虑所有域还是只有直接域，其中所有字段都是直接替换）。
     """
     if dct is None:
         dct = {}
@@ -922,15 +908,6 @@ class Config(PickleableDict, Documented):
         self.__dict__['_reset_dct_'] = reset_dct
 
     def dumps(self, **kwargs) -> bytes:
-        """
-        序列化为字节。
-        
-        参数:
-            **kwargs: 传递给dill.dumps的参数
-            
-        返回:
-            序列化后的字节
-        """
         return dill.dumps(dict(
             dct=PickleableDict(self).dumps(**kwargs),
             copy_kwargs=self.copy_kwargs_,
@@ -1087,26 +1064,15 @@ class Configured(Pickleable, Documented):
                 cls_: tp.Optional[type] = None,
                 **new_config) -> ConfiguredT:
         """
-        通过复制和（可选）更改配置创建新实例。
-        
-        参数:
-            copy_mode_: 复制模式
-            nested_: 是否递归复制所有子字典
-            cls_: 新实例的类
-            **new_config: 要合并的新配置
-            
-        返回:
-            新实例
-            
-        警告:
-            此操作不会返回实例的副本，而是返回使用相同配置和可写属性
-            （或其副本，取决于copy_mode）初始化的新实例。
+        通过复制当前实例的状态（配置和可写属性）并（可选）合并新配置来创建并返回一个新的Configured实例。
         """
+        # 确定用于创建新实例的类，如果 cls_ 为 None，则使用当前实例的类。
         if cls_ is None:
             cls_ = self.__class__
         new_config = self.config.merge_with(new_config, copy_mode=copy_mode_, nested=nested_)
         new_instance = cls_(**new_config)
         for attr in self.writeable_attrs:
+            # 获取当前实例中该属性的值。
             attr_obj = getattr(self, attr)
             if isinstance(attr_obj, Config):
                 attr_obj = attr_obj.copy(
@@ -1126,19 +1092,7 @@ class Configured(Pickleable, Documented):
              copy_mode: tp.Optional[str] = 'shallow',
              nested: tp.Optional[bool] = None,
              cls: tp.Optional[type] = None) -> ConfiguredT:
-        """
-        通过复制配置创建新实例。
-        
-        参数:
-            copy_mode: 复制模式
-            nested: 是否递归复制所有子字典
-            cls: 新实例的类
-            
-        返回:
-            新实例
-            
-        参见Configured.replace方法。
-        """
+        """ 通过复制配置创建新实例。"""
         return self.replace(copy_mode_=copy_mode, nested_=nested, cls_=cls)
 
     def dumps(self, **kwargs) -> bytes:

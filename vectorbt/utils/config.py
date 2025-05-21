@@ -50,6 +50,34 @@ class Default:
 
 
 def resolve_dict(dct: tp.DictLikeSequence, i: tp.Optional[int] = None) -> dict:
+    """
+    从一个可能是列表的字典或字典序列中解析并返回一个字典。
+
+    这个函数的主要目的是从多种可能的输入格式中提取一个标准的Python字典。
+    输入 `dct` 可以是：
+    1. `None`: 函数会返回一个空字典。
+    2. 单个字典: 函数会返回该字典的一个浅拷贝。
+    3. 字典列表/元组 (序列):
+        - 如果提供了索引 `i`，函数会尝试获取序列中 `dct[i]` 的元素。
+            - 如果 `dct[i]` 是 `None`，返回空字典。
+            - 如果 `dct[i]` 是一个字典，返回该字典的浅拷贝。
+        - 如果没有提供索引 `i` (即 `i` 为 `None`)，并且 `dct` 是一个序列，则函数会引发 `ValueError`，
+          因为无法确定应该从序列中选择哪个字典。
+
+    参数:
+        dct: tp.DictLikeSequence
+            一个类字典的输入或类字典的序列。
+            它可以是 `None`、一个 Python 字典 (`dict`)，或者一个包含字典（或 `None`）的列表/元组。
+            例如: `None`, `{'a': 1}`, `[{'b': 2}, None, {'c': 3}]`.
+        i: tp.Optional[int], 默认值: None
+            一个可选的整数索引。当 `dct` 是一个字典序列时，此参数用于指定从序列中选择哪个字典。
+            如果 `dct` 不是序列，或者 `i` 为 `None`，则此参数通常不直接使用或被忽略（除非`dct`是序列而`i`是None导致错误）。
+
+    返回:
+        dict
+            一个Python字典。根据输入 `dct` 和 `i` 的不同情况，返回的字典可能是空的、输入字典的拷贝，
+            或者是输入序列中指定索引处字典的拷贝。
+    """
     if dct is None:
         dct = {}
     if isinstance(dct, dict):

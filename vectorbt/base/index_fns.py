@@ -740,6 +740,15 @@ def align_index_to(index1: tp.Index, index2: tp.Index) -> pd.IndexSlice:
     它首先会尝试通过级别名称匹配来识别共同级别，并确保 `index2` 中的级别值是 `index1` 相应级别值的子集。
     然后，它会尝试通过简单的平铺（tiling）操作来对齐。如果平铺不可行，
     则会进行更复杂的元素级比较（通过内部的 Numba 加速函数 `_align_index_to_nb`）来找到精确的对齐方式。
+    
+    index1: Ai index2:Bj
+    根据索引的名称找到匹配对应的例如：A1->B1, A2->B2
+    构造 Aindex = S[A1(A1 ∩ B1)], S[A2(A2 ∩ B2)] 注意这里不能有重复行
+        Bindex = S[B1(A1 ∩ B1)], S[B2(A2 ∩ B2)]
+    于是可进一步构造 S[Aindex(Aindex ∩ Bindex)]
+                   S[Bindex(Aindex ∩ Bindex)]
+    然后调用 _align_index_to_nb(S[Aindex(Aindex ∩ Bindex)], S[Bindex(Aindex ∩ Bindex)]) 即可
+    
 
     参数:
         index1: tp.Index
@@ -917,68 +926,46 @@ def align_index_to(index1: tp.Index, index2: tp.Index) -> pd.IndexSlice:
 def align_indexes(indexes: tp.Sequence[tp.Index]) -> tp.List[tp.IndexSlice]:
     """
     将序列 `indexes` 中的多个 Pandas 索引对象相互对齐。
+    返回[i]对应：indexes中最长（可能很多个）且最前能够对齐到Indexindexs[i]的IndexSlice
 
-    对齐的基准是输入序列中长度最长的索引。所有其他较短的索引都将尝试对齐到
-    序列中任何一个长度最长的索引。
-
-    参数:
-        indexes: tp.Sequence[tp.Index]
-            一个包含 Pandas 索引对象 (`pd.Index` 或 `pd.MultiIndex`) 的序列。
-            这些索引将被相互对齐。
-
-    返回:
-        tp.List[pd.IndexSlice]
-            一个列表，包含与输入 `indexes` 序列中每个索引相对应的 `pd.IndexSlice` 对象。
-            应用这些切片后，可以使原始索引在长度和结构上（尽可能）对齐。
-
-    注意事项:
-        - 如果一个较短的索引无法通过 `align_index_to` 对齐到任何一个最长的索引
-          （例如，因为没有共同的级别名称，或者级别值不兼容导致 `align_index_to` 抛出 `ValueError`），
-          则此函数会引发 `ValueError`。
+    示例:
+        >>> import pandas as pd
+        >>> index1 = pd.Index([1, 2, 1], name='L1')  # 与index2共享L1级别
+        >>> index2 = pd.MultiIndex.from_tuples([('x',1),('x',2),('y',1),('y',2)], names=['L2','L1'])
+        >>> index3 = pd.MultiIndex.from_tuples([('x',),('y',)], names=['L2'])
+        >>> indices = align_indexes([index1, index2, index3])
+        
+        # 步骤分解:
+        # 1. max_len = 4（index2的长度）
+        # 2. 处理index1（长度3）:
+        #    - 找到第一个最长索引index2
+        #    - 通过align_index_to对齐，返回索引位置数组[0,1,0,1]
+        # 3. 处理index2（长度4）: 直接返回[:]
+        # 4. 处理index3（长度2）:
+        #    - 找到第一个最长索引index2
+        #    - 通过align_index_to对齐，返回索引位置数组[0,0,1,1]
+        >>> print(indices)
+        [<pandas.core.indexing.IndexSlice object at ...>,
+         <pandas.core.indexing.IndexSlice object at ...>,
+         <pandas.core.indexing.IndexSlice object at ...>]
+        >>> index1[indices[0]]  # 返回 [1, 2, 1, 2]
+        >>> index3[indices[2]]  # 返回 ['x', 'x', 'y', 'y']
     """
-    # 计算输入索引序列 `indexes` 中的最大长度。
-    # `map(len, indexes)` 会对 `indexes` 中的每个索引应用 `len` 函数，生成一个包含所有索引长度的迭代器。
-    # `max()` 函数则从这些长度中找出最大值，作为对齐的目标长度。
     max_len = max(map(len, indexes))
-    # 初始化一个空列表 `indices`，用于存储为每个输入索引计算得到的对齐切片 (`pd.IndexSlice`)。
     indices = []
     for i in range(len(indexes)):
         index_i = indexes[i]
-        # 检查当前索引 `index_i` 的长度是否已经等于序列中的最大长度 `max_len`。
         if len(index_i) == max_len:
-            # 如果当前索引的长度已经是最大长度，则它不需要进一步对齐。
-            # `pd.IndexSlice[:]` 创建一个表示“选择所有元素”的切片对象，功能上等同于 Python 的 `slice(None, None, None)`。
-            # 这意味着对于这个已经达到最大长度的索引，其自身的对齐方式就是选择全部。
             indices.append(pd.IndexSlice[:])
         else:
-            # 如果当前索引 `index_i` 的长度小于最大长度，则它需要被对齐。
-            # 再次遍历整个输入索引序列 `indexes`，目的是寻找一个长度为 `max_len` 的索引 `index_j` 作为对齐的目标。
-            # `j` 是潜在目标索引在序列中的位置。
             for j in range(len(indexes)):
                 index_j = indexes[j]
-                # 检查这个潜在目标索引 `index_j` 的长度是否等于 `max_len`。
-                # 我们只选择长度最长的索引作为对齐的目标。
                 if len(index_j) == max_len:
                     try:
-                        # 尝试使用 `align_index_to` 函数来计算将 `index_i` (源索引，较短) 对齐到 `index_j` (目标索引，较长) 所需的切片。
-                        # `align_index_to` 会返回一个 `pd.IndexSlice` 对象，该对象可以用于索引 `index_i` 以产生对齐后的结果。
-                        # 如果 `align_index_to` 成功执行并返回切片，则将此切片添加到 `indices` 列表中。
                         indices.append(align_index_to(index_i, index_j))
-                        # 一旦成功为 `index_i` 找到了一个可行的对齐方案 (即 `align_index_to` 未抛出错误)，
-                        # 就跳出内部的 `for j` 循环，不再尝试其他目标索引 `index_j`，继续处理下一个 `index_i`。
                         break
                     except ValueError:
-                        # 如果 `align_index_to(index_i, index_j)` 抛出 `ValueError`，
-                        # 这通常意味着 `index_i` 无法对齐到当前的 `index_j`（例如，因为它们之间没有共同的级别，
-                        # 或者级别值的兼容性不满足 `align_index_to` 的要求）。
-                        # 在这种情况下，捕获这个异常，然后 `pass` (不执行任何操作)，
-                        # 内部循环会继续，尝试下一个长度为 `max_len` 的 `index_j` 作为对齐目标。
                         pass
-            # 在内部 `for j` 循环（即尝试了所有长度为 `max_len` 的 `index_j` 作为目标）结束后，
-            # 需要检查是否已为当前的 `index_i` 成功添加了对齐切片。
-            # `len(indices)` 应该等于 `i + 1` (因为我们按顺序为每个 `index_i` 添加一个切片)。
-            # 如果 `len(indices)` 小于 `i + 1`，则意味着对于当前的 `index_i`，
-            # 内部循环未能找到任何一个 `index_j` 使得 `align_index_to(index_i, index_j)` 能够成功。
             if len(indices) < i + 1:
                 raise ValueError(f"位置{i}的索引无法对齐")
     return indices

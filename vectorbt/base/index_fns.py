@@ -991,23 +991,82 @@ def pick_levels(index: tp.Index,
                 required_levels: OptionalLevelSequence = None,
                 optional_levels: OptionalLevelSequence = None) -> tp.Tuple[tp.List[int], tp.List[int]]:
     """
-    选择可选和必需级别并返回它们的索引。
-    
+    从多级索引 (MultiIndex) 中根据用户指定的“必需级别”和“可选级别”列表，
+    智能地选择并返回这些级别在原始索引中的整数位置。
+
+    该函数主要用于当用户需要从一个多级索引中提取特定子集级别进行操作时，
+    允许用户灵活地指定哪些级别是必须存在的（如果指定为 None，则从剩余级别中自动填充），
+    哪些级别是可选的（如果指定为 None，则表示跳过该可选槽位）。
+
     参数:
-        index: 多级索引对象
-        required_levels: 必需级别的列表，可以包含None表示任意级别
-        optional_levels: 可选级别的列表，可以包含None表示跳过
-        
+        index: tp.Index
+            输入的 Pandas 索引对象。此函数期望它是一个 `pd.MultiIndex`。
+            如果不是 `pd.MultiIndex`，将引发 `AssertionError`。
+        required_levels: OptionalLevelSequence, 默认值: None
+            一个序列，定义了必须被选择的级别。序列中的每个元素可以是：
+            - 级别名称 (str): 例如 'level_name'。
+            - 级别整数位置 (int): 例如 0, 1, -1 (表示最后一个级别)。
+            - None: 表示该“必需”槽位将从 `index` 中尚未被其他指定级别占用的级别里按顺序自动选择一个。
+            如果 `required_levels` 本身为 `None` 或空列表，则表示没有显式指定的必需级别。
+        optional_levels: OptionalLevelSequence, 默认值: None
+            一个序列，定义了可选的级别。序列中的每个元素可以是：
+            - 级别名称 (str)。
+            - 级别整数位置 (int)。
+            - None: 表示该“可选”槽位将被忽略，即不选择任何级别来填充它。
+            如果 `optional_levels` 本身为 `None` 或空列表，则表示没有可选级别。
+
     返回:
-        Tuple[List[int], List[int]]: 必需级别和可选级别的索引位置元组
-        
-    说明:
-        此函数帮助从多级索引中提取特定的级别集合，区分为"必需"和"可选"。
-        必需级别如果指定为None，会从剩余可用级别中自动选择。
-        可选级别如果指定为None，则会被忽略。
-        
+        tp.Tuple[tp.List[int], tp.List[int]]
+            一个元组，包含两个列表：
+            1. 第一个列表 (`_required_levels_indices`): 包含所有被选中的必需级别在原始 `index` 中的整数位置。
+               列表的顺序与输入 `required_levels` 序列中非None元素的顺序以及自动填充None槽位的顺序一致。
+            2. 第二个列表 (`_optional_levels_indices`): 包含所有被选中的可选级别在原始 `index` 中的整数位置。
+               如果原始 `optional_levels` 中的某个元素是 `None`，则结果列表的对应位置也会是 `None`。
+               列表的顺序与输入 `optional_levels` 序列的顺序一致。
+
     异常:
-        如果索引的级别数与预期不符，将引发ValueError。
+        AssertionError:
+            - 如果 `index` 不是 `pd.MultiIndex`。
+            - 如果 `required_levels` 或 `optional_levels` 中的元素不是 `str`, `int`, 或 `None`。
+        ValueError:
+            - 如果指定的级别名称在 `index` 的名称中找不到。
+            - 如果在 `required_levels` 中指定了 `None` 来自动填充，但实际可用的剩余级别数量
+              与需要填充的 `None` 槽位数量不匹配。具体来说，如果 (index.nlevels - (已指定的必需级别数) - (已指定的可选级别数))
+              不等于 `required_levels` 中 `None` 的数量。
+
+    示例:
+        >>> import pandas as pd
+        >>> idx = pd.MultiIndex.from_tuples([
+        ...     ('A', 1, 'x', 10.0), ('B', 2, 'y', 20.0), ('C', 3, 'z', 30.0)
+        ... ], names=['L1', 'L2_int', 'L3_char', 'L4_float'])
+        >>> print("原始索引:")
+        >>> print(idx)
+        原始索引:
+        MultiIndex([('A', 1, 'x', 10.0),
+                    ('B', 2, 'y', 20.0),
+                    ('C', 3, 'z', 30.0)],
+                   names=['L1', 'L2_int', 'L3_char', 'L4_float'])
+
+        >>> # 示例 1: 指定部分必需级别 (名称和None)，无可选级别
+        >>> req_lvls, opt_lvls = pick_levels(idx, required_levels=['L1', None, 'L4_float'])
+        >>> print(f"示例1 - 必需: {req_lvls}, 可选: {opt_lvls}")
+        示例1 - 必需: [0, 1, 3], 可选: []
+        >>> # L1 -> 0, L4_float -> 3. 剩余级别有 L2_int(1), L3_char(2).
+        >>> # required_levels 中间的 None 会选择 L2_int(1).
+
+        >>> # 示例 2: 指定部分可选级别 (位置和None)，一个必需级别
+        >>> req_lvls, opt_lvls = pick_levels(idx, required_levels=[0], optional_levels=[None, 'L3_char', -1])
+        >>> print(f"示例2 - 必需: {req_lvls}, 可选: {opt_lvls}")
+        示例2 - 必需: [0], 可选: [None, 2, 3]
+        >>> # 必需: 级别0 (L1).
+        >>> # 可选: 第一个None跳过, L3_char -> 2, 最后一个级别 (-1) -> L4_float(3).
+
+        >>> # 示例 3: 所有必需级别都通过 None 自动选择，指定一个可选级别
+        >>> req_lvls, opt_lvls = pick_levels(idx, required_levels=[None, None], optional_levels=['L1'])
+        >>> print(f"示例3 - 必需: {req_lvls}, 可选: {opt_lvls}")
+        示例3 - 必需: [1, 2], 可选: [0]
+        >>> # 可选: L1 -> 0. 剩余级别 L2_int(1), L3_char(2), L4_float(3).
+        >>> # 两个None会按顺序选择 L2_int(1) 和 L3_char(2).
     """
     if required_levels is None:
         required_levels = []
@@ -1015,10 +1074,18 @@ def pick_levels(index: tp.Index,
         optional_levels = []
     checks.assert_instance_of(index, pd.MultiIndex)
 
+    # 计算在 optional_levels 中实际指定了具体级别（非 None）的数量。
     n_opt_set = len(list(filter(lambda x: x is not None, optional_levels)))
+    # 计算在 required_levels 中实际指定了具体级别（非 None）的数量。
     n_req_set = len(list(filter(lambda x: x is not None, required_levels)))
+    # 计算在减去已指定的可选级别后，索引中还剩下多少级别。
+    # 这些是可能用于满足必需级别（包括自动填充None槽位）的候选级别。
     n_levels_left = index.nlevels - n_opt_set
+    # 检查是否有必需级别被指定为 None (等待自动填充)。
     if n_req_set < len(required_levels):
+        # 如果有必需级别是 None，那么 (剩余可用于必需的级别数) 必须等于 (总共声明的必需级别数)。
+        # 换句话说，(index.nlevels - n_opt_set) 必须等于 len(required_levels)。
+        # 如果不相等，说明提供的 MultiIndex 的级别总数不足以满足所有声明的必需级别（包括指定和自动填充的）。
         if n_levels_left != len(required_levels):
             n_expected = len(required_levels) + n_opt_set
             raise ValueError(f"预期{n_expected}个级别，找到{index.nlevels}个")
@@ -1063,26 +1130,74 @@ def pick_levels(index: tp.Index,
 
 def find_first_occurrence(index_value: tp.Any, index: tp.Index) -> int:
     """
-    返回`index_value`在`index`中的第一次出现的索引位置。
-    
+    在给定的 Pandas 索引对象中查找指定值首次出现的整数位置。
+
+    `pandas.Index.get_loc` 方法用于获取标签在索引中的位置。
+    然而，`get_loc` 的返回值类型多样：
+    - 如果标签唯一，返回整数位置。
+    - 如果标签不唯一（重复），可能返回布尔掩码数组或切片。
+    - 对于某些类型的索引和标签，也可能返回整数列表。
+    此函数旨在统一处理这些情况，并总是返回第一次出现该值的整数索引。
+
     参数:
-        index_value: 要查找的索引值
-        index: 索引对象
-        
+        index_value (tp.Any):
+            需要在 `index` 中查找其首次出现位置的值。
+            该值的类型应与 `index` 中元素的类型兼容。
+        index (tp.Index):
+            Pandas 索引对象 (例如 `pd.Index`, `pd.DatetimeIndex`, `pd.MultiIndex` 等)，
+            将在此索引中搜索 `index_value`。
+
     返回:
-        int: 第一次出现的位置
-        
-    说明:
-        此函数处理pandas的get_loc返回的各种可能类型：
-        - 整数（直接位置）
-        - 切片（取起始位置）
-        - 列表或数组（取第一个元素）
+        int:
+            `index_value` 在 `index` 中首次出现的整数位置（从0开始计数）。
+
+    示例:
+        >>> import pandas as pd
+        >>> # 创建一个包含重复值的简单索引
+        >>> idx = pd.Index(['a', 'b', 'c', 'a', 'd', 'b'])
+        >>> find_first_occurrence('a', idx)
+        0
+        >>> find_first_occurrence('b', idx)
+        1
+        >>> find_first_occurrence('d', idx)
+        4
+
+        >>> # 创建一个 DatetimeIndex
+        >>> dt_idx = pd.to_datetime(['2023-01-01', '2023-01-02', '2023-01-01 10:00', '2023-01-03'])
+        >>> # 查找日期 '2023-01-01' 的首次出现（可能匹配多个时间点）
+        >>> find_first_occurrence(pd.Timestamp('2023-01-01'), dt_idx)
+        0
+
+        >>> # 如果索引中包含重复标签，get_loc 可能返回布尔数组
+        >>> idx_multi_occurrence = pd.Index([10, 20, 10, 30, 10])
+        >>> # 假设 idx_multi_occurrence.get_loc(10) 返回类似 array([ True, False,  True, False,  True])
+        >>> find_first_occurrence(10, idx_multi_occurrence)
+        0
     """
+    # 调用 Pandas 索引对象的 get_loc 方法获取指定值的位置信息。
+    # get_loc 的返回值可以是整数、切片对象、列表或布尔型 NumPy 数组。
     loc = index.get_loc(index_value)
+
+    # 检查 get_loc 返回的是否为切片对象 (slice)。
+    # 例如，在时间序列索引中，查找一个日期可能会返回一个包含该日期所有时间点的切片。
     if isinstance(loc, slice):
+        # 如果是切片，第一次出现的位置是切片的起始点。
         return loc.start
+
+    # 检查 get_loc 返回的是否为列表 (list)。
+    # 某些情况下（例如特定版本的Pandas或特定索引类型），对于重复值，get_loc可能返回包含所有匹配位置的列表。
     elif isinstance(loc, list):
+        # 如果是列表，第一次出现的位置是列表的第一个元素。
         return loc[0]
+
+    # 检查 get_loc 返回的是否为 NumPy 数组 (np.ndarray)。
+    # 通常，当索引中存在重复值时，get_loc 会返回一个布尔掩码数组，标记所有匹配值的位置。
     elif isinstance(loc, np.ndarray):
+        # 如果是 NumPy 数组（通常是布尔掩码），np.flatnonzero(loc) 会返回所有 True 值（即匹配位置）的扁平化索引。
+        # 然后取这个结果数组的第一个元素，即为第一次出现的位置。
+        # 例如，如果 loc 是 array([False, True, False, True])，np.flatnonzero(loc) 是 array([1, 3])，则返回 1。
         return np.flatnonzero(loc)[0]
+
+    # 如果 loc 不是以上任何类型（切片、列表、NumPy 数组），
+    # 那么它应该是一个整数，表示该值在索引中的唯一位置。
     return loc

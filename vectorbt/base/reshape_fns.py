@@ -1964,86 +1964,10 @@ def unstack_to_df(arg: tp.SeriesFrame,
 @njit(cache=True)
 def flex_choose_i_and_col_nb(a: tp.Array, flex_2d: bool = True) -> tp.Tuple[int, int]:
     """
-    根据输入数组 `a` 的形状，智能选择用于灵活索引的行索引 `i` 和列索引 `col`。
-
-    该函数旨在与 `flex_select_nb` 配合使用，通过预先确定基准的行、列索引，
-    使得 `flex_select_nb` 能够以低内存占用的方式，模拟 NumPy 的广播行为来选取元素。
-    它避免了显式地将数组广播到目标形状，从而节省内存，并能处理任意方向的无限广播。
-
-    参数:
-        a (tp.Array):
-            输入的 NumPy 数组。可以是0维（标量）、1维或2维数组。
-        flex_2d (bool, optional):
-            一个布尔标志，用于控制当输入数组 `a` 是一维时如何解释其维度。默认为 `True`。
-            - 如果 `flex_2d` 为 `True`（默认）：一维数组将被视为“列向量”或沿列扩展的数组。
-              这意味着行索引 `i` 将被固定（通常为0），而列索引 `col` 将根据数组的实际长度而变化（如果长度为1则为0，否则为-1表示灵活）。
-            - 如果 `flex_2d` 为 `False`：一维数组将被视为“行向量”或沿行扩展的数组。
-              这意味着列索引 `col` 将被固定（通常为0），而行索引 `i` 将根据数组的实际长度而变化（如果长度为1则为0，否则为-1表示灵活）。
-
-    返回:
-        tp.Tuple[int, int]:
-            一个包含两个整数的元组 `(i, col)`:
-            - `i`: 选择的基准行索引。如果为 -1，表示行索引是灵活的，应由 `flex_select_nb` 中的 `flex_i` 决定。
-                   如果为 0，表示行索引固定为0（除非数组特定维度长度为1）。
-            - `col`: 选择的基准列索引。如果为 -1，表示列索引是灵活的，应由 `flex_select_nb` 中的 `flex_col` 决定。
-                     如果为 0，表示列索引固定为0（除非数组特定维度长度为1）。
-
-    工作原理:
-        - 对于0维数组 (标量): 行索引 `i` 和列索引 `col` 都设置为0，因为标量可以广播到任何形状的单个值。
-        - 对于1维数组:
-            - 如果 `flex_2d` 为 `True`:
-                - 行索引 `i` 设置为0。
-                - 如果数组长度为1 (例如 `np.array([x])`)，列索引 `col` 设置为0 (视为单元素列)。
-                - 否则 (数组长度大于1)，列索引 `col` 设置为-1 (表示列是灵活的，可以沿列广播)。
-            - 如果 `flex_2d` 为 `False`:
-                - 列索引 `col` 设置为0。
-                - 如果数组长度为1，行索引 `i` 设置为0 (视为单元素行)。
-                - 否则，行索引 `i` 设置为-1 (表示行是灵活的，可以沿行广播)。
-        - 对于2维数组:
-            - 如果数组的行数（`a.shape[0]`）为1，行索引 `i` 设置为0。否则，`i` 保持为-1 (灵活行)。
-            - 如果数组的列数（`a.shape[1]`）为1，列索引 `col` 设置为0。否则，`col` 保持为-1 (灵活列)。
-
-    示例:
-        >>> import numpy as np
-        >>> # from numba import njit # 假设 njit 已经导入
-        >>> # @njit # 为了直接运行示例，暂时注释掉njit
-        ... # def flex_choose_i_and_col_nb(a: np.ndarray, flex_2d: bool = True) -> tuple[int, int]:
-        ... #     # ... 函数体 ...
-
-        >>> # 0D array (标量)
-        >>> arr_0d = np.array(5)
-        >>> flex_choose_i_and_col_nb(arr_0d)
-        (0, 0)
-
-        >>> # 1D array, flex_2d=True (默认，视为列)
-        >>> arr_1d_col = np.array([1, 2, 3])
-        >>> flex_choose_i_and_col_nb(arr_1d_col) # i=0 (固定行), col=-1 (灵活列)
-        (0, -1)
-        >>> arr_1d_single_col = np.array([10])
-        >>> flex_choose_i_and_col_nb(arr_1d_single_col) # i=0, col=0 (单元素列)
-        (0, 0)
-
-        >>> # 1D array, flex_2d=False (视为行)
-        >>> arr_1d_row = np.array([4, 5, 6])
-        >>> flex_choose_i_and_col_nb(arr_1d_row, flex_2d=False) # i=-1 (灵活行), col=0 (固定列)
-        (-1, 0)
-        >>> arr_1d_single_row = np.array([20])
-        >>> flex_choose_i_and_col_nb(arr_1d_single_row, flex_2d=False) # i=0, col=0 (单元素行)
-        (0, 0)
-
-        >>> # 2D array
-        >>> arr_2d_full = np.array([[1, 2], [3, 4]])
-        >>> flex_choose_i_and_col_nb(arr_2d_full) # i=-1, col=-1 (行列都灵活)
-        (-1, -1)
-        >>> arr_2d_row_vec = np.array([[1, 2, 3]]) # 1行N列
-        >>> flex_choose_i_and_col_nb(arr_2d_row_vec) # i=0 (固定行), col=-1 (灵活列)
-        (0, -1)
-        >>> arr_2d_col_vec = np.array([[1], [2], [3]]) # N行1列
-        >>> flex_choose_i_and_col_nb(arr_2d_col_vec) # i=-1 (灵活行), col=0 (固定列)
-        (-1, 0)
-        >>> arr_2d_single_element = np.array([[5]]) # 1行1列
-        >>> flex_choose_i_and_col_nb(arr_2d_single_element) # i=0, col=0 (单元素二维数组)
-        (0, 0)
+    根据标量/一维/二维数组 a 的行/列数是否为1，返回 (0/-1, 0/-1)
+    其中一维数组较为特殊：
+        flex_2d == True：认为是行向量，返回 (0, 0/-1)
+        flex_2d == False：认为是列向量，返回 (0/-1, 0)
     """
     i = -1
     col = -1
@@ -2069,148 +1993,22 @@ def flex_choose_i_and_col_nb(a: tp.Array, flex_2d: bool = True) -> tp.Tuple[int,
 
 @njit(cache=True)
 def flex_select_nb(a: tp.Array, i: int, col: int, flex_i: int, flex_col: int, flex_2d: bool = True) -> tp.Any:
-    """
-    以广播方式从数组 `a` 中灵活选择元素，无需实际执行广播操作。
-    
-    此函数模拟 NumPy 广播机制，但不实际创建广播后的数组，从而节省内存。
-    它可用于高效地从数组中提取元素，就像数组已经被广播到目标形状一样。
-    
-    参数:
-        a (tp.Array): 
-            输入的数组，可以是0维(标量)、1维或2维数组。
-        i (int): 
-            目标行索引。当需要从2维目标形状中选择元素时使用。
-        col (int): 
-            目标列索引。当需要从2维目标形状中选择元素时使用。
-        flex_i (int): 
-            灵活的行索引指示器。
-            如果为-1，表示使用 `i` 作为实际行索引；否则直接使用 flex_i 值。
-        flex_col (int): 
-            灵活的列索引指示器。
-            如果为-1，表示使用 `col` 作为实际列索引；否则直接使用 flex_col 值。
-        flex_2d (bool, optional): 
-            控制如何处理1维数组。默认为 True。
-            - 当为 True 时：将1维数组视为列向量，使用 flex_col 作为索引
-            - 当为 False 时：将1维数组视为行向量，使用 flex_i 作为索引
-    
-    返回:
-        tp.Any: 
-            从数组 `a` 中选择的元素值。
-    
-    示例:
-        >>> import numpy as np
-        >>> from numba import njit
-        >>> from vectorbt.base.reshape_fns import flex_select_nb
-        >>> 
-        >>> # 示例1：从0维数组(标量)选择元素
-        >>> a_scalar = np.array(5)
-        >>> flex_select_nb(a_scalar, 0, 0, 0, 0)
-        5
-        >>> 
-        >>> # 示例2：从1维数组选择元素(作为列向量处理)
-        >>> a_1d = np.array([10, 20, 30])
-        >>> flex_select_nb(a_1d, 0, 1, 0, -1, flex_2d=True)  # 返回索引1处的元素
-        20
-        >>> 
-        >>> # 示例3：从1维数组选择元素(作为行向量处理)
-        >>> flex_select_nb(a_1d, 1, 0, -1, 0, flex_2d=False)  # 返回索引1处的元素
-        20
-        >>> 
-        >>> # 示例4：从2维数组选择元素
-        >>> a_2d = np.array([[1, 2, 3], [4, 5, 6]])
-        >>> flex_select_nb(a_2d, 0, 2, -1, -1)  # 返回位置[0,2]的元素
-        3
-        >>> flex_select_nb(a_2d, 1, 1, -1, -1)  # 返回位置[1,1]的元素
-        5
-    """
-    # 如果灵活行索引为-1，则使用目标行索引i替代
     if flex_i == -1:
         flex_i = i
-    
-    # 如果灵活列索引为-1，则使用目标列索引col替代
     if flex_col == -1:
         flex_col = col
     
-    # 处理0维数组(标量)：直接返回该标量值
     if a.ndim == 0:
         return a.item()
     
-    # 处理1维数组：根据flex_2d参数决定如何索引
     if a.ndim == 1:
         if flex_2d:
-            # 当flex_2d为True时，将1维数组视为列向量，使用flex_col作为索引
             return a[flex_col]
-        # 当flex_2d为False时，将1维数组视为行向量，使用flex_i作为索引
         return a[flex_i]
-    
-    # 处理2维数组：使用[flex_i, flex_col]作为行列索引
     return a[flex_i, flex_col]
 
 
 @njit(cache=True)
 def flex_select_auto_nb(a: tp.Array, i: int, col: int, flex_2d: bool = True) -> tp.Any:
-    """
-    对于数组 a，当 (i, col) 可能超出了 a 的索引范围：
-        当这种情况发生时，可以想象将 a 沿行/列进行延申（广播），然后在这个想象的广播后的数组中按照索引(i, col)取值
-    自动确定数组维度并灵活选择元素，无需实际执行广播操作，高效节省内存。
-    
-    此函数是 `flex_choose_i_and_col_nb` 和 `flex_select_nb` 的组合封装，用于自动处理数组的维度特性。
-    它首先确定输入数组的最佳索引方式，然后以广播方式选择元素，而无需实际创建广播后的数组。
-    
-    参数:
-        a (tp.Array): 
-            输入数组，可以是0维(标量)、1维或2维数组。此数组的元素将被选择性地返回。
-            
-        i (int): 
-            目标行索引。当需要从2维目标形状中选择元素时使用。例如，从广播后的形状为(5,3)的
-            结果中选择第2行元素，则i=2。
-            
-        col (int): 
-            目标列索引。当需要从2维目标形状中选择元素时使用。例如，从广播后的形状为(5,3)的
-            结果中选择第1列元素，则col=1。
-            
-        flex_2d (bool, optional): 
-            控制如何处理1维数组。默认为True。
-            - 当为True时：将1维数组视为列向量(形状为(n,1))，数组沿着列方向扩展
-            - 当为False时：将1维数组视为行向量(形状为(1,n))，数组沿着行方向扩展
-    
-    返回:
-        tp.Any: 
-            从数组 `a` 中选择的元素值，相当于从广播后的数组 `a` 中取 `[i, col]` 位置的值。
-    
-    示例:
-        >>> import numpy as np
-        >>> from vectorbt.base.reshape_fns import flex_select_auto_nb
-        >>> 
-        >>> # 示例1：从标量选择元素 (会返回标量值本身)
-        >>> a_scalar = np.array(5)
-        >>> flex_select_auto_nb(a_scalar, 2, 3)  # 无论i和col是什么，都返回5
-        5
-        >>> 
-        >>> # 示例2：从一维数组选择元素 (默认视为列向量)
-        >>> a_1d = np.array([10, 20, 30])
-        >>> flex_select_auto_nb(a_1d, 0, 1)  # 返回索引1处的元素 (20)
-        20
-        >>> flex_select_auto_nb(a_1d, 0, 2)  # 返回索引2处的元素 (30)
-        30
-        >>> 
-        >>> # 示例3：从一维数组选择元素 (视为行向量)
-        >>> flex_select_auto_nb(a_1d, 1, 0, flex_2d=False)  # 返回索引1处的元素 (20)
-        20
-        >>> flex_select_auto_nb(a_1d, 2, 0, flex_2d=False)  # 返回索引2处的元素 (30)
-        30
-        >>> 
-        >>> # 示例4：从二维数组选择元素
-        >>> a_2d = np.array([[1, 2, 3], [4, 5, 6]])
-        >>> flex_select_auto_nb(a_2d, 0, 2)  # 返回位置[0,2]的元素 (3)
-        3
-        >>> flex_select_auto_nb(a_2d, 1, 1)  # 返回位置[1,1]的元素 (5)
-        5
-    """
-    # 根据输入数组a的形状和flex_2d参数，自动确定最佳的索引方式
-    # 返回flex_i和flex_col，用于指示如何处理行和列的广播
     flex_i, flex_col = flex_choose_i_and_col_nb(a, flex_2d)
-    
-    # 使用确定的索引方式从数组a中选择元素
-    # 相当于从广播后的数组中选择[i,col]位置的元素
     return flex_select_nb(a, i, col, flex_i, flex_col, flex_2d)

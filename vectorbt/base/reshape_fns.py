@@ -774,36 +774,33 @@ def broadcast_index(args: tp.Sequence[tp.AnyArray],
         # 输出: Index(['single', 'single', 'single'], dtype='object')
         ```
     """
-    # 从 vectorbt 的设置中导入广播相关的配置，如果 ignore_sr_names 未指定，则从全局配置中获取默认值
     from vectorbt._settings import settings
     broadcasting_cfg = settings['broadcasting']
+    
     if ignore_sr_names is None:
         ignore_sr_names = broadcasting_cfg['ignore_sr_names']
-    # 根据 axis 确定当前是在处理 'index' (行) 还是 'columns' (列)
+        
     index_str = 'columns' if axis == 1 else 'index'
-    # 将目标形状 to_shape 统一为至少二维的元组形式，方便后续处理
+
     to_shape_2d = (to_shape[0], 1) if len(to_shape) == 1 else to_shape
-    # 根据当前的 axis (行或列) 和目标形状，确定新索引/列应该具有的最大长度
-    # 如果 axis 是 1 (列)，则取 to_shape_2d 的第二个元素 (列数)
-    # 如果 axis 是 0 (行)，则取 to_shape_2d 的第一个元素 (行数)
     maxlen = to_shape_2d[1] if axis == 1 else to_shape_2d[0]
+    
     new_index = None
 
-    # 处理 index_from == 'keep' 或 None 的情况
+    # index_from == 'keep' 或 None：直接返回 None
     if index_from is None or (isinstance(index_from, str) and index_from.lower() == 'keep'):
-        # 'keep' 规则意味着函数本身不强制生成一个新索引，这里直接返回 None。
         return None
     
-    # 如果 index_from 是一个整数，表示使用 args 中该索引位置的对象的索引/列
+    # 如果 index_from 是一个整数，表示使用 args[index_from]的index/columns
     if isinstance(index_from, int):
-        # 检查指定位置的对象是否是 Pandas 对象
+        # 如果不是pandas对象则没有index/columns，引发错误
         if not checks.is_pandas(args[index_from]):
             raise TypeError(f"Argument under index {index_from} must be a pandas object")
-        # 根据axis获取args[index_from]的索引/列
         new_index = index_fns.get_index(args[index_from], axis)
+        
     # 如果 index_from 是一个字符串，表示特定的规则
     elif isinstance(index_from, str):
-        # 如果规则是 'reset'，则忽略原始索引，生成一个标准的 RangeIndex
+        # 'reset'：忽略原始索引，生成一个标准的 RangeIndex
         if index_from.lower() == 'reset':
             new_index = pd.RangeIndex(start=0, stop=maxlen, step=1)
         # 如果规则是 'stack' 或 'strict'
@@ -1126,274 +1123,134 @@ def broadcast(*args: tp.ArrayLike,
                 - 如果有多个参数：返回广播后数组的元组
             如果 return_meta=True：
                 - 返回一个四元组 (广播后的数组或元组, 新形状, 新索引, 新列)
-    
-    异常:
-        ValueError: 当数组无法按照广播规则广播到相同的形状时抛出。
-    
-    示例:
-        >>> import numpy as np
-        >>> import pandas as pd
-        >>> from vectorbt.base.reshape_fns import broadcast
-        
-        >>> # 示例 1: 不同形状数组的广播
-        >>> v = 0  # 标量
-        >>> a = np.array([1, 2, 3])  # 一维数组
-        >>> # 广播标量和一维数组 - 标量会被扩展匹配数组形状
-        >>> result = broadcast(v, a)
-        >>> print(result)
-        (array([0, 0, 0]), array([1, 2, 3]))
-        
-        >>> # 示例 2: 使用 Pandas 对象
-        >>> sr = pd.Series([1, 2, 3], index=['x', 'y', 'z'], name='a')
-        >>> df = pd.DataFrame([[1, 2, 3], [4, 5, 6]], 
-        ...                   index=['row1', 'row2'], 
-        ...                   columns=['A', 'B', 'C'])
-        >>> # 广播 Series 和 DataFrame，保留索引信息
-        >>> sr_bc, df_bc = broadcast(sr, df, index_from='stack', columns_from=1)
-        >>> print(f"广播后的 Series:")
-        >>> print(sr_bc)
-        (row1, x)    1
-        (row1, y)    2
-        (row1, z)    3
-        (row2, x)    1
-        (row2, y)    2
-        (row2, z)    3
-        Name: a, dtype: int64
-        
-        >>> print(f"\n广播后的 DataFrame:")
-        >>> print(df_bc)
-                   A  B  C
-        (row1, x)  1  2  3
-        (row1, y)  1  2  3
-        (row1, z)  1  2  3
-        (row2, x)  4  5  6
-        (row2, y)  4  5  6
-        (row2, z)  4  5  6
-        
-        >>> # 示例 3: 指定目标形状
-        >>> result = broadcast(a, to_shape=(3, 3), to_pd=True)
-        >>> print(result)
-           0  1  2
-        0  1  1  1
-        1  2  2  2
-        2  3  3  3
-        
-        >>> # 示例 4: 返回元数据
-        >>> arrays, shape, idx, cols = broadcast(v, a, sr, return_meta=True)
-        >>> print(f"广播后形状: {shape}")
-        广播后形状: (3,)
-        >>> print(f"广播后索引: {idx}")
-        广播后索引: Index(['x', 'y', 'z'], dtype='object')
-        >>> print(f"广播后列: {cols}")
-        广播后列: None
-        
-        >>> # 示例 5: 控制结果类型 (强制 NumPy)
-        >>> result = broadcast(sr, df, to_pd=False)
-        >>> print(f"类型: {type(result[0])}")
-        类型: <class 'numpy.ndarray'>
-        >>> print(f"第一个结果数组:")
-        >>> print(result[0])
-        [[1]
-         [2]
-         [3]]
-        
-        >>> # 示例 6: 对齐索引
-        >>> sr1 = pd.Series([10, 20, 30], index=['a', 'b', 'c'])
-        >>> sr2 = pd.Series([40, 50], index=['b', 'c'])
-        >>> # 默认会尝试对齐索引
-        >>> sr1_bc, sr2_bc = broadcast(sr1, sr2, align_index=True)
-        >>> print(sr1_bc)
-        b    20
-        c    30
-        dtype: int64
-        >>> print(sr2_bc)
-        b    40
-        c    50
-        dtype: int64
-        
-        >>> # 示例 7: 广播不同形状的多维数组
-        >>> arr1 = np.array([[1, 2], [3, 4]])  # 2x2
-        >>> arr2 = np.array([5, 6])            # 1D
-        >>> result = broadcast(arr1, arr2)
-        >>> print("广播后的数组1:")
-        >>> print(result[0])
-        [[1 2]
-         [3 4]]
-        >>> print("\n广播后的数组2:")
-        >>> print(result[1])
-        [[5 6]
-         [5 6]]
     """
-    # 从设置中导入广播配置信息
     from vectorbt._settings import settings
     broadcasting_cfg = settings['broadcasting']
 
-    # 初始化变量，判断是否有 Pandas 对象以及是否操作二维数据
-    is_pd = False  # 标记是否有 Pandas 对象
-    is_2d = False  # 标记是否有二维数据
+    is_pd = False  # 标记是否转成pandas对象(Series/DataFrame)
+    is_2d = False  # 标记Series是否转成DataFrame
     
-    # 如果没有提供 require_kwargs，初始化为空字典
     if require_kwargs is None:
         require_kwargs = {}
     
-    # 设置对齐索引和列的默认值
+    # 对于pandas对象，是否对齐index或columns（统一长度）
     if align_index is None:
         align_index = broadcasting_cfg['align_index']
     if align_columns is None:
         align_columns = broadcasting_cfg['align_columns']
     
-    # 设置索引和列来源的默认值
+    # 对于pandas对象，对齐后如何设置最后的index或columns
     if index_from is None:
         index_from = broadcasting_cfg['index_from']
     if columns_from is None:
         columns_from = broadcasting_cfg['columns_from']
 
-    # 将输入参数转换为 NumPy 数组或 Pandas 对象
-    # 同时检查是否有二维数据或 Pandas 对象
+    # 将输入参数转换为 NumPy 数组或 Pandas 对象，放入 arr_args
+    # 同时标记is_2d和is_pd
     arr_args = []
     for i in range(len(args)):
-        # 将参数转换为数组（保持 Pandas 对象不变）
         arg = to_any_array(args[i])
-        # 检查是否有二维数据
         if arg.ndim > 1:
             is_2d = True
-        # 检查是否有 Pandas 对象
         if checks.is_pandas(arg):
             is_pd = True
         arr_args.append(arg)
 
-    # 如果指定了目标形状，再次检查是否有二维数据
     if to_shape is not None:
-        # 将单个整数形状转换为元组形状
         if isinstance(to_shape, int):
             to_shape = (to_shape,)
-        # 确保 to_shape 是元组类型
         checks.assert_instance_of(to_shape, tuple)
-        # 如果形状有多个维度，标记为二维数据
         if len(to_shape) > 1:
             is_2d = True
 
-    # 如果 to_frame 不为 None，根据其值决定是保持 Series 还是转换为 DataFrame
     if to_frame is not None:
         is_2d = to_frame
 
-    # 如果 to_pd 不为 None，强制设置是否转换为 Pandas 对象
     if to_pd is not None:
-        # 如果 to_pd 是序列，只要有一个为 True 就标记为 Pandas
         if isinstance(to_pd, Sequence):
             is_pd = any(to_pd)
         else:
-            # 否则直接使用 to_pd 的值
             is_pd = to_pd
 
+    # 把 arr_args 中各pandas对象按照index对齐
     if align_index:
-        # 示例：假设输入两个需要索引对齐的DataFrame
-        # 原始数据:
-        # arr_args[0] = pd.DataFrame([1,2,3], index=['a','b','c'])
-        # arr_args[1] = pd.DataFrame([4,5,6], index=['b','c','d'])
-        
+        # 被对齐的pandas对象：其原来每行仍存在，但是顺序可能打乱，数量也可能变多
+        # 对齐的pandas对象是arr_args中index长度最大的（可能有多个）
+        # 对齐后arr_args中的所有pandas对象的index长度相同
         index_to_align = []
         for i in range(len(arr_args)):
             if checks.is_pandas(arr_args[i]) and len(arr_args[i].index) > 1:
-                index_to_align.append(i)  # 找到需要对齐的参数位置 -> [0, 1]
-        
+                index_to_align.append(i) 
         if len(index_to_align) > 1:
             indexes = [arr_args[i].index for i in index_to_align]  
-            # 获取索引列表 -> [Index(['a','b','c']), Index(['b','c','d'])]
-            
             if len(set(map(len, indexes))) > 1:
                 index_indices = index_fns.align_indexes(indexes)  
-                # 对齐后的索引位置 -> [array([1,2]), array([0,1])]
-                
                 for i in index_to_align:
-                    # 对第一个参数取索引1,2的位置（'b','c'）
-                    # 对第二个参数取索引0,1的位置（'b','c'）
                     arr_args[i] = arr_args[i].iloc[index_indices[index_to_align.index(i)]]
-                    # 结果:
-                    # arr_args[0] = pd.DataFrame([2,3], index=['b','c'])
-                    # arr_args[1] = pd.DataFrame([4,5], index=['b','c'])
-    
-    # 对齐 Pandas 对象的列（如果启用）
+                    
+    # 把 arr_args 中各DataFrame对象按照columns对齐
     if align_columns:
-        # 找出需要对齐列的参数位置（仅 DataFrame 且列数大于1）
         cols_to_align = []
         for i in range(len(arr_args)):
             if checks.is_frame(arr_args[i]) and len(arr_args[i].columns) > 1:
                 cols_to_align.append(i)
-        # 如果有多个需要对齐的列
         if len(cols_to_align) > 1:
-            # 收集所有需要对齐的列索引
             indexes = [arr_args[i].columns for i in cols_to_align]
-            # 如果列索引长度不同，则进行对齐
             if len(set(map(len, indexes))) > 1:
-                # 获取对齐后的列位置
                 col_indices = index_fns.align_indexes(indexes)
-                # 使用对齐后的列位置更新数组
                 for i in cols_to_align:
                     arr_args[i] = arr_args[i].iloc[:, col_indices[cols_to_align.index(i)]]
 
-    # 如果处理二维数据，将所有 Pandas Series 转换为 DataFrame
+    # is_2d为真，将 arr_args中的所有Series转换为DataFrame，得到arr_args_2d
     arr_args_2d = [arg.to_frame() if is_2d and checks.is_series(arg) else arg for arg in arr_args]
 
-    # 确定最终的广播形状
+    # 如果未指定to_shape，计算arr_args_2d的广播shape（对其中所有的元素使用广播规则）
     if to_shape is None:
-        # 根据 NumPy 的广播规则计算最终形状
         if broadcast_shapes is not None:
-            # 使用 numpy 的 broadcast_shapes 函数（较新版本 NumPy）
             to_shape = broadcast_shapes(*map(lambda x: np.asarray(x).shape, arr_args_2d))
         else:
-            # 使用 _broadcast_shape 函数（较旧版本 NumPy）
             to_shape = broadcast_shape(*map(np.asarray, arr_args_2d))
 
-    # 执行广播操作
+    # 对于arr_args_2d中的每一项，根据keep_raw决定保持不变，还是转成numpy.ndarray后广播到to_shape，然后放入new_args
     new_args = []
     for i, arg in enumerate(arr_args_2d):
-        # 检查是否保持原始数组不变
         if isinstance(keep_raw, Sequence):
             _keep_raw = keep_raw[i]
         else:
             _keep_raw = keep_raw
-        # 将参数广播到目标形状
+        # 会将arg转成numpy.ndarray，然后广播到to_shape
         bc_arg = np.broadcast_to(arg, to_shape)
-        # 如果需要保持原始数组，则不使用广播后的结果
         if _keep_raw:
             new_args.append(arg)
             continue
         new_args.append(bc_arg)
 
-    # 应用 np.require 的要求（如类型要求、内存排列等）
+    # 根据require_kwargs，决定arr_args_2d中的每一项是否应用np.require（如类型要求、内存排列等）
     for i in range(len(new_args)):
-        # 解析 require_kwargs 参数
         _require_kwargs = resolve_dict(require_kwargs, i=i)
-        # 应用 np.require 函数确保数组满足要求
         new_args[i] = np.require(new_args[i], **_require_kwargs)
 
-    # 如果需要转换为 Pandas 对象，处理索引和列
+    # is_pd为真，生成pandas对象最后统一的index和columns
     if is_pd:
-        # 使用 broadcast_index 函数生成广播后的索引和列
         new_index = broadcast_index(arr_args, to_shape, index_from=index_from, axis=0, **kwargs)
         new_columns = broadcast_index(arr_args, to_shape, index_from=columns_from, axis=1, **kwargs)
     else:
-        # 不需要 Pandas 索引和列
         new_index, new_columns = None, None
 
-    # 将广播后的数组恢复为原始类型（如 Series/DataFrame）
+    # 将new_args中被转成numpy.ndarray的原pandas对象恢复为原始类型
     for i in range(len(new_args)):
-        # 检查是否保持原始数组
         if isinstance(keep_raw, Sequence):
             _keep_raw = keep_raw[i]
         else:
             _keep_raw = keep_raw
         if _keep_raw:
             continue
-        
-        # 确定是否转换为 Pandas
+
         if isinstance(to_pd, Sequence):
             _is_pd = to_pd[i]
         else:
             _is_pd = is_pd
-        
-        # 使用 wrap_broadcasted 函数包装广播后的数组
+
         new_args[i] = wrap_broadcasted(
             arr_args[i],  # 原始参数
             new_args[i],  # 广播后的数组
@@ -1404,18 +1261,12 @@ def broadcast(*args: tp.ArrayLike,
 
     # 根据参数数量和 return_meta 参数决定返回值
     if len(new_args) > 1:
-        # 多个参数的情况
         if return_meta:
-            # 返回广播后的数组元组、形状、索引和列
             return tuple(new_args), to_shape, new_index, new_columns
-        # 仅返回广播后的数组元组
         return tuple(new_args)
     
-    # 单个参数的情况
     if return_meta:
-        # 返回广播后的单个数组、形状、索引和列
         return new_args[0], to_shape, new_index, new_columns
-    # 仅返回广播后的单个数组
     return new_args[0]
 
 
@@ -1425,37 +1276,67 @@ def broadcast_to(arg1: tp.ArrayLike,
                  index_from: tp.Optional[IndexFromLike] = None,
                  columns_from: tp.Optional[IndexFromLike] = None,
                  **kwargs) -> BCRT:
-    """Broadcast `arg1` to `arg2`.
+    """
+    将 `arg1` 广播（broadcast）到 `arg2` 的形状，并可选择保留/恢复为 pandas 对象。
 
-    Pass None to `index_from`/`columns_from` to use index/columns of the second argument.
+    该函数是 `broadcast` 的简化接口，常用于将一个标量、数组、Series、DataFrame等“对齐”到另一个对象的形状和索引/列。
+    广播时会自动处理 numpy/pandas 类型的转换，并可根据参数决定是否保留 pandas 的 index/columns 信息。
 
-    Keyword arguments `**kwargs` are passed to `broadcast`.
+    参数说明：
+        arg1 (tp.ArrayLike):
+            需要被广播的对象。可以是标量、list、np.ndarray、pd.Series、pd.DataFrame 等。
+        arg2 (tp.ArrayLike):
+            目标对象。其 shape、index、columns 会作为广播的目标。
+        to_pd (Optional[bool], 默认 None):
+            是否将输出转换为 pandas 对象（Series/DataFrame）。
+            - None：自动判断（如果 arg2 是 pandas，则输出也是 pandas，否则为 numpy）。
+            - True：强制输出为 pandas。
+            - False：强制输出为 numpy。
+        index_from (Optional[IndexFromLike], 默认 None):
+            指定广播后 index 的来源。
+            - None：自动使用 arg2 的 index。
+            - 其他值：详见 vectorbt.base.reshape_fns.broadcast 的 index_from 说明。
+        columns_from (Optional[IndexFromLike], 默认 None):
+            指定广播后 columns 的来源。
+            - None：自动使用 arg2 的 columns。
+            - 其他值：详见 vectorbt.base.reshape_fns.broadcast 的 columns_from 说明。
+        **kwargs:
+            其他关键字参数，传递给底层的 broadcast 函数。
 
-    Usage:
-        ```pycon
+    返回值：
+        BCRT:
+            广播后的对象。类型取决于 to_pd 参数和 arg2 的类型，可能是 numpy.ndarray、pd.Series 或 pd.DataFrame。
+
+    使用示例：
         >>> import numpy as np
         >>> import pandas as pd
         >>> from vectorbt.base.reshape_fns import broadcast_to
 
+        >>> # 示例1：将一维 numpy 数组广播到 Series 的 index
         >>> a = np.array([1, 2, 3])
         >>> sr = pd.Series([4, 5, 6], index=pd.Index(['x', 'y', 'z']), name='a')
-
         >>> broadcast_to(a, sr)
         x    1
         y    2
         z    3
         Name: a, dtype: int64
 
+        >>> # 示例2：将 Series 广播到 numpy 数组
         >>> broadcast_to(sr, a)
         array([4, 5, 6])
-        ```
+
+        >>> # 示例3：强制输出为 DataFrame
+        >>> df = pd.DataFrame([[1, 2], [3, 4]], columns=['A', 'B'])
+        >>> broadcast_to(0, df, to_pd=True)
+           A  B
+        0  0  0
+        1  0  0
     """
     arg1 = to_any_array(arg1)
     arg2 = to_any_array(arg2)
     if to_pd is None:
         to_pd = checks.is_pandas(arg2)
     if to_pd:
-        # Take index and columns from arg2
         if index_from is None:
             index_from = index_fns.get_index(arg2, 0)
         if columns_from is None:
@@ -1464,152 +1345,463 @@ def broadcast_to(arg1: tp.ArrayLike,
 
 
 def broadcast_to_array_of(arg1: tp.ArrayLike, arg2: tp.ArrayLike) -> tp.Array:
-    """Broadcast `arg1` to the shape `(1, *arg2.shape)`.
+    """
+    【函数说明】
+    将一维 `arg1` 广播到形状为 `(arg1.shape[0], *arg2.shape)` 的多维数组。
+    注意：如果 arg1 是多维的，且后面的维度与 arg2 一致，则直接返回 arg1。
 
-    `arg1` must be either a scalar, a 1-dim array, or have 1 dimension more than `arg2`.
+    【参数说明】
+    arg1 : tp.ArrayLike
+        需要被广播的对象。可以是标量、1维数组，或比 arg2 多1个维度的数组。
+        - 如果是标量或1维数组，将被扩展为第一个维度与参数数量相同，其余维度与 arg2 相同。
+        - 如果已经是 (N, *arg2.shape) 形状，则直接返回。
+    arg2 : tp.ArrayLike
+        目标数组。其 shape 用于决定广播的目标形状。
 
-    Usage:
-        ```pycon
-        >>> import numpy as np
-        >>> from vectorbt.base.reshape_fns import broadcast_to_array_of
+    【返回值】
+    tp.Array
+        广播后的 numpy.ndarray，形状为 (N, *arg2.shape)，N为arg1的长度或1。
 
-        >>> broadcast_to_array_of([0.1, 0.2], np.empty((2, 2)))
-        [[[0.1 0.1]
-          [0.1 0.1]]
-
-         [[0.2 0.2]
-          [0.2 0.2]]]
-        ```
+    【使用示例】
+    >>> import numpy as np
+    >>> from vectorbt.base.reshape_fns import broadcast_to_array_of
+    >>> # 示例1：arg1为一维数组，arg2为二维
+    >>> broadcast_to_array_of([0.1, 0.2], np.empty((2, 2)))
+    array([[[0.1, 0.1],
+            [0.1, 0.1]],
+           [[0.2, 0.2],
+            [0.2, 0.2]]])
+    >>> # 示例2：arg1为标量
+    >>> broadcast_to_array_of(5, np.empty((3, 4)))
+    array([[[5, 5, 5, 5],
+            [5, 5, 5, 5],
+            [5, 5, 5, 5]]])
+    >>> # 示例3：arg1已经是目标形状
+    >>> arr = np.arange(6).reshape(2, 3)
+    >>> broadcast_to_array_of(arr, np.empty((3,)))
+    array([[0, 1, 2],
+           [3, 4, 5]])
     """
     arg1 = np.asarray(arg1)
     arg2 = np.asarray(arg2)
+    
+    # 如果 arg1 的维度比 arg2 多1，并且后面的各维与 arg2 完全一致，说明已经是目标形状，直接返回
     if arg1.ndim == arg2.ndim + 1:
         if arg1.shape[1:] == arg2.shape:
             return arg1
-    # From here on arg1 can be only a 1-dim array
+        
+    # 如果 arg1 是标量（0维），先转为1维数组，方便后续扩展
     if arg1.ndim == 0:
         arg1 = to_1d(arg1)
+        
     checks.assert_ndim(arg1, 1)
-
+    
+    # 如果 arg2 是标量（0维），直接返回 arg1（无需扩展）
     if arg2.ndim == 0:
         return arg1
+    
     for i in range(arg2.ndim):
         arg1 = np.expand_dims(arg1, axis=-1)
+        
     return np.tile(arg1, (1, *arg2.shape))
 
 
 def broadcast_to_axis_of(arg1: tp.ArrayLike, arg2: tp.ArrayLike, axis: int,
                          require_kwargs: tp.KwargsLike = None) -> tp.Array:
-    """Broadcast `arg1` to an axis of `arg2`.
-
-    If `arg2` has less dimensions than requested, will broadcast `arg1` to a single number.
-
-    For other keyword arguments, see `broadcast`."""
+    """
+    将数组 `arg1` 广播到目标数组 `arg2` 在指定轴 `axis` 上的大小。
+    
+    此函数用于将一个数组（通常是一维的）广播到另一个数组特定轴的维度大小，
+    常用于参数化操作，如为每个时间点设置不同参数。
+    
+    参数:
+        arg1: tp.ArrayLike
+            需要被广播的输入数组。可以是标量、列表、numpy数组或pandas对象。
+            此数组将被广播到与 `arg2` 在 `axis` 轴上相同的大小。
+        
+        arg2: tp.ArrayLike
+            目标数组。其在 `axis` 轴上的大小将决定 `arg1` 被广播的目标大小。
+        
+        axis: int
+            指定 `arg2` 的哪个轴作为广播目标。例如，如果 `axis=0`，则 `arg1` 
+            将被广播到与 `arg2.shape[0]` 相同的大小。
+        
+        require_kwargs: tp.KwargsLike, 可选
+            传递给 `np.require` 的关键字参数，用于控制输出数组的类型和内存布局。
+            例如 {'dtype': np.float64} 可以强制输出为浮点型。
+    
+    返回:
+        tp.Array
+            广播后的数组，大小与 `arg2` 在 `axis` 轴上的大小相同。
+    
+    示例:
+        >>> import numpy as np
+        >>> from vectorbt.base.reshape_fns import broadcast_to_axis_of
+        
+        >>> # 示例1：广播标量到一维数组的长度
+        >>> arg1 = 5
+        >>> arg2 = np.array([1, 2, 3, 4])
+        >>> broadcast_to_axis_of(arg1, arg2, axis=0)
+        array([5, 5, 5, 5])
+        
+        >>> # 示例2：广播一维数组到二维数组的行数
+        >>> arg1 = [10, 20]
+        >>> arg2 = np.array([[1, 2, 3], [4, 5, 6]])
+        >>> broadcast_to_axis_of(arg1, arg2, axis=0)
+        array([10, 20])
+    """
     if require_kwargs is None:
         require_kwargs = {}
+    
     arg2 = to_any_array(arg2)
+    
     if arg2.ndim < axis + 1:
-        return np.broadcast_to(arg1, (1,))[0]  # to a single number
+        return np.broadcast_to(arg1, (1,))[0]  
+    
     arg1 = np.broadcast_to(arg1, (arg2.shape[axis],))
+    
+    # 应用 np.require 对数组进行类型和内存布局转换
+    # 可以指定数据类型、内存排列顺序、是否可写等
     arg1 = np.require(arg1, **require_kwargs)
+    
     return arg1
 
 
 def get_multiindex_series(arg: tp.SeriesFrame) -> tp.Series:
-    """Get Series with a multi-index.
+    """
+    确保输入对象是一个具有多级索引 (MultiIndex) 的 Pandas Series。
 
-    If DataFrame has been passed, should at maximum have one row or column."""
+    如果传入的是一个 Pandas DataFrame，该函数会尝试将其转换为 Series。
+    转换规则如下：
+    - 如果 DataFrame 恰好有一行，则该行被转换为 Series，此时原 DataFrame 的列索引将成为新 Series 的索引。
+    - 如果 DataFrame 恰好有一列，则该列被转换为 Series，此时原 DataFrame 的行索引将成为新 Series 的索引。
+    - 如果 DataFrame 的行数和列数均大于1，则会引发 ValueError。
+    最终，函数会校验得到的 Series 是否拥有多级索引，若否则会引发断言错误。
+
+    参数:
+        arg (tp.SeriesFrame):
+            输入的 Pandas Series 或 DataFrame。
+            期望此对象在转换后能形成一个具有多级索引的 Series。
+
+    返回:
+        tp.Series:
+            一个保证具有多级索引的 Pandas Series。
+
+    异常:
+        TypeError: 如果输入 `arg` 不是 Pandas Series 或 DataFrame。
+        ValueError: 如果输入的 DataFrame 不是单行或单列，无法明确转换为 Series。
+        AssertionError: 如果最终得到的 Series 的索引不是 `pd.MultiIndex` 类型。
+
+    示例:
+        >>> import pandas as pd
+        >>> # 示例 1: 输入一个已有的多级索引 Series
+        >>> index1 = pd.MultiIndex.from_tuples([('A', 1), ('A', 2)], names=['L1', 'L2'])
+        >>> series1 = pd.Series([10, 20], index=index1)
+        >>> get_multiindex_series(series1)
+        L1  L2
+        A   1     10
+            2     20
+        dtype: int64
+
+        >>> # 示例 2: 输入一个单行 DataFrame
+        >>> df_single_row = pd.DataFrame([[100, 200]], columns=pd.MultiIndex.from_tuples([('X', 'a'), ('X', 'b')]))
+        >>> # 期望结果: 行索引被丢弃，列的多级索引成为 Series 的索引
+        >>> get_multiindex_series(df_single_row)
+        X  a    100
+           b    200
+        Name: 0, dtype: int64
+
+
+        >>> # 示例 3: 输入一个单列 DataFrame
+        >>> index3 = pd.MultiIndex.from_tuples([('C', 3), ('D', 4)], names=['L1', 'L2'])
+        >>> df_single_col = pd.DataFrame({'Data': [30, 40]}, index=index3)
+        >>> # 期望结果: 列名被丢弃，原DataFrame的行多级索引成为 Series 的索引
+        >>> get_multiindex_series(df_single_col)
+        L1  L2
+        C   3     30
+        D   4     40
+        Name: Data, dtype: int64
+
+        >>> # 示例 4: 输入一个不符合转换条件的 DataFrame (多行多列)
+        >>> df_multi = pd.DataFrame({'A': [1,2], 'B': [3,4]})
+        >>> try:
+        ...     get_multiindex_series(df_multi)
+        ... except ValueError as e:
+        ...     print(e)
+        Supported are either Series or DataFrame with one column/row
+
+        >>> # 示例 5: 输入一个 Series 但其索引不是 MultiIndex
+        >>> series_plain_index = pd.Series([1,2,3])
+        >>> try:
+        ...     get_multiindex_series(series_plain_index)
+        ... except AssertionError: # checks.assert_instance_of 会抛出 AssertionError
+        ...     print("AssertionError: Index is not a MultiIndex")
+        AssertionError: Index is not a MultiIndex
+    """
+    # 断言输入参数 arg 必须是 pandas.Series 或 pandas.DataFrame 类型。
     checks.assert_instance_of(arg, (pd.Series, pd.DataFrame))
+
+    # 检查 arg 是否为 DataFrame 类型。
     if checks.is_frame(arg):
+        # 如果 DataFrame 只有一行。
         if arg.shape[0] == 1:
+            # 提取这唯一的一行，将其转换为 Series。
+            # 此时，原 DataFrame 的列索引将成为新 Series 的索引。
             arg = arg.iloc[0, :]
+        # 如果 DataFrame 只有一列 (而不是只有一行的情况)。
         elif arg.shape[1] == 1:
+            # 提取这唯一的一列，将其转换为 Series。
+            # 此时，原 DataFrame 的行索引将成为新 Series 的索引。
             arg = arg.iloc[:, 0]
+        # 如果 DataFrame 的行数和列数都大于1。
         else:
+            # 抛出 ValueError，因为无法明确地将多行多列的 DataFrame 转换为单一的 Series。
             raise ValueError("Supported are either Series or DataFrame with one column/row")
+
+    # 经过上述处理后，arg 要么是原始的 Series，要么是从 DataFrame 转换而来的 Series。
+    # 在这里，断言 arg 的索引必须是 pandas.MultiIndex 类型。
     checks.assert_instance_of(arg.index, pd.MultiIndex)
+
     return arg
 
 
 def unstack_to_array(arg: tp.SeriesFrame, levels: tp.Optional[tp.MaybeLevelSequence] = None) -> tp.Array:
-    """Reshape `arg` based on its multi-index into a multi-dimensional array.
-
-    Use `levels` to specify what index levels to unstack and in which order.
-
-    Usage:
-        ```pycon
-        >>> import pandas as pd
-        >>> from vectorbt.base.reshape_fns import unstack_to_array
-
-        >>> index = pd.MultiIndex.from_arrays(
-        ...     [[1, 1, 2, 2], [3, 4, 3, 4], ['a', 'b', 'c', 'd']])
-        >>> sr = pd.Series([1, 2, 3, 4], index=index)
-
-        >>> unstack_to_array(sr).shape
-        (2, 2, 4)
-
-        >>> unstack_to_array(sr)
-        [[[ 1. nan nan nan]
-         [nan  2. nan nan]]
-
-         [[nan nan  3. nan]
-        [nan nan nan  4.]]]
-
-        >>> unstack_to_array(sr, levels=(2, 0))
-        [[ 1. nan]
-         [ 2. nan]
-         [nan  3.]
-         [nan  4.]]
-        ```
     """
-    # Extract series
+    将具有多级索引的Pandas Series或DataFrame根据指定的索引级别重塑为一个多维NumPy数组。
+
+    此函数的核心功能是将扁平化的Series/DataFrame数据，根据其MultiIndex的结构，
+    “展开”成一个具有与索引层级对应维度的高维数组。缺失值将由NaN填充。
+
+    参数:
+        arg (tp.SeriesFrame): 
+            输入的Pandas Series或DataFrame。
+            - 如果是DataFrame，它必须最多只有一行或一列，以便能明确地转换为一个Series进行处理。
+            - 其索引必须是 `pd.MultiIndex` 类型。
+        levels (tp.Optional[tp.MaybeLevelSequence], optional): 
+            一个整数、字符串，或者它们的序列，用于指定将哪些索引级别（level）以及以何种顺序
+            用于构建新NumPy数组的各个维度。
+            - 如果为 `None` (默认值)，则使用MultiIndex中的所有级别，顺序与它们在MultiIndex中的定义一致。
+            - 级别可以通过其整数位置（从0开始）或名称（如果MultiIndex的级别已命名）来指定。
+            - 这些指定的级别将决定输出NumPy数组的维度顺序和大小。
+
+    返回:
+        tp.Array: 
+            一个多维NumPy数组。
+            - 数组的维度数量等于 `levels` 参数中指定的级别数量（或MultiIndex的总级别数，如果`levels`为None）。
+            - 每个维度的大小由对应索引级别中的唯一值的数量决定。
+            - 数组中的值来源于原始Series，根据索引映射到相应的位置。
+            - 如果在unstack后的某个组合在原始数据中不存在，则该位置在新数组中将用 `np.nan` 填充。
+
+    异常:
+        ValueError: 
+            - 如果输入的DataFrame不符合单行或单列的要求。
+            - 如果Series的MultiIndex中包含重复的索引条目（因为重复索引无法唯一确定unstack后的位置）。
+        AssertionError:
+            - 如果输入 `arg` 的类型不是Pandas Series或DataFrame。
+            - 如果转换后的Series的索引类型不是 `pd.MultiIndex`。
+
+    使用示例:
+        >>> import pandas as pd
+        >>> import numpy as np
+        >>> from vectorbt.base import index_fns # 假设 index_fns 在此路径下或已导入
+        >>> # from vectorbt.base.reshape_fns import get_multiindex_series, unstack_to_array # 假设在此
+
+        >>> # 构造一个具有三级索引的Series
+        >>> index = pd.MultiIndex.from_arrays(
+        ...     [[1, 1, 2, 2],    # 第0级索引 (例如：'group')
+        ...      [3, 4, 3, 4],    # 第1级索引 (例如：'category')
+        ...      ['a', 'b', 'c', 'd']], # 第2级索引 (例如：'item')
+        ...     names=['group', 'category', 'item']
+        ... )
+        >>> sr = pd.Series([10, 20, 30, 40], index=index)
+        >>> print("原始Series:")
+        >>> print(sr)
+        原始Series:
+        group  category  item
+        1      3         a       10
+               4         b       20
+        2      3         c       30
+               4         d       40
+        dtype: int64
+
+        >>> # 示例1: 使用所有索引级别 (默认行为)
+        >>> arr_all_levels = unstack_to_array(sr)
+        >>> print("\\n示例1 - 使用所有级别unstack:")
+        >>> print(f"形状: {arr_all_levels.shape}") # 形状将是 (2, 2, 4) -> (len(unique_group), len(unique_cat), len(unique_item))
+                                                # 注意：如果某一级别的唯一值在不同组合中不全出现，则该级别在数组中的长度是所有唯一值的总数
+                                                # 在这个例子中，item 'a','b','c','d' 都是唯一的，所以第三维是4
+        >>> print(arr_all_levels)
+        示例1 - 使用所有级别unstack:
+        形状: (2, 2, 4)
+        [[[10. nan nan nan]
+          [nan 20. nan nan]]
+        <BLANKLINE>
+         [[nan nan 30. nan]
+          [nan nan nan 40.]]]
+    """
+    # 首先，确保输入参数arg被转换为具有多级索引的一维Pandas Series
+    # get_multiindex_series会处理arg是Series或单行/单列DataFrame的情况，并检查索引是否为MultiIndex
     sr: tp.Series = to_1d(get_multiindex_series(arg))
+
+    # 检查转换后的Series的索引中是否包含重复条目
+    # 如果有重复索引，unstack的结果是不明确的，因此抛出ValueError
     if sr.index.duplicated().any():
         raise ValueError("Index contains duplicate entries, cannot reshape")
 
+    # 初始化两个列表：
+    # unique_idx_list: 用于存储每个被选中进行unstack的索引级别中的唯一值数组。
+    #                  这些唯一值将决定新NumPy数组对应维度的大小和“刻度”。
+    # vals_idx_list: 用于存储原始Series中每个数据点，在其对应的每个被选中的索引级别上，
+    #                的索引值在unique_idx_list中对应级别唯一值数组中的整数位置。
+    #                这些整数位置将作为填充新NumPy数组时的坐标。
     unique_idx_list = []
     vals_idx_list = []
+    # 如果用户没有指定levels参数，则默认使用Series索引的所有级别
     if levels is None:
         levels = range(sr.index.nlevels)
+    # 如果levels是单个整数或字符串（代表单个级别），将其转换为单元素元组，以便后续统一处理
     if isinstance(levels, (int, str)):
         levels = (levels,)
+
+    # 遍历由levels参数指定的每一个索引级别
     for level in levels:
+        # 从Series的MultiIndex中提取当前level的所有索引值，并转换为NumPy数组
         vals = index_fns.select_levels(sr.index, level).to_numpy()
+        # 找到当前level中的所有唯一索引值，这些唯一值将构成新数组在此维度上的“刻度”
         unique_vals = np.unique(vals)
+        # 将当前level的唯一值数组存入unique_idx_list
         unique_idx_list.append(unique_vals)
+
+        # 创建一个字典，将当前level的每个唯一索引值映射到它在unique_vals数组中的整数位置（0, 1, 2, ...）
+        # 例如，如果unique_vals是['a', 'b', 'c']，则idx_map是{'a':0, 'b':1, 'c':2}
         idx_map = dict(zip(unique_vals, range(len(unique_vals))))
+        # 对于原始Series中当前level的每一个索引值，查询它在idx_map中的整数位置
+        # 结果vals_idx是一个列表，长度与原始Series相同，包含了每个数据点在当前level上的整数坐标
         vals_idx = list(map(lambda x: idx_map[x], vals))
+        # 将当前level的整数坐标列表存入vals_idx_list
         vals_idx_list.append(vals_idx)
 
+    # 根据每个选定level的唯一值的数量，确定新NumPy数组的形状
+    # 例如，如果levels有两个级别，第一个级别有U1个唯一值，第二个级别有U2个唯一值，则形状为(U1, U2)
+    # 使用np.full创建一个填充了np.nan的多维数组，其形状由unique_idx_list中各唯一值数组的长度决定
     a = np.full(list(map(len, unique_idx_list)), np.nan)
-    a[tuple(zip(vals_idx_list))] = sr.values
+
+    # 这是关键的赋值步骤：将原始Series的值填充到新创建的多维数组a中
+    # tuple(zip(vals_idx_list))的解释：
+    #   - vals_idx_list是一个列表的列表，例如 [[level0_pos_for_item1, level0_pos_for_item2, ...],
+    #                                       [level1_pos_for_item1, level1_pos_for_item2, ...], ...]
+    #   - zip(*vals_idx_list) (如果vals_idx_list是转置的) 或者 zip(vals_idx_list[0], vals_idx_list[1], ...)
+    #     这里应该是 zip(*vals_idx_list) 如果 vals_idx_list 是 [[item1_L0, item1_L1], [item2_L0, item2_L1], ...]
+    #     或者，如果 vals_idx_list 的结构是 [[all_L0_indices], [all_L1_indices], ...]，
+    #     那么 tuple(zip(*vals_idx_list)) 是不正确的，应该是 a[tuple(vals_idx_list)] 或者
+    #     NumPy的高级索引期望的是一个元组，元组的每个元素是一个数组，对应一个维度。
+    #     例如 a[(coords_dim0, coords_dim1, coords_dim2)]
+    #     vals_idx_list中的每个子列表对应一个维度的坐标。
+    #     因此，直接用 tuple(vals_idx_list) 作为索引是正确的，它会被NumPy解释为高级索引。
+    #     例如，如果 a 是2D，vals_idx_list 是 [[0,1,0], [2,0,1]]，
+    #     则 a[([0,1,0], [2,0,1])] 会访问 (0,2), (1,0), (0,1) 这三个位置。
+    # 将sr.values（原始Series中的数据值）赋给数组a中由vals_idx_list确定的多维坐标位置
+    a[tuple(vals_idx_list)] = sr.values
+    
+    # 返回填充好数据的多维NumPy数组
     return a
 
 
 def make_symmetric(arg: tp.SeriesFrame, sort: bool = True) -> tp.Frame:
-    """Make `arg` symmetric.
+    """
+    将输入的Pandas Series或DataFrame转换为一个对称的DataFrame。
 
-    The index and columns of the resulting DataFrame will be identical.
+    对称意味着结果DataFrame的行索引和列索引是完全相同的。
+    新的行列索引将由原始输入 `arg` 的行索引和列索引中的所有唯一值构成。
+    函数会尝试智能地处理原始索引的名称。
 
-    Requires the index and columns to have the same number of levels.
+    参数:
+        arg (tp.SeriesFrame):
+            输入的Pandas Series或DataFrame。
+            - 如果是Series，它会首先被转换为一个单列的DataFrame。
+        sort (bool, optional):
+            一个布尔值，指示在合并原始行索引和列索引以形成新的对称索引时，是否应对这些索引用值进行排序。
+            - `True` (默认值): 新的对称索引将按值排序。
+            - `False`: 新的对称索引将按照原始行索引、列索引值连接后的顺序，并移除重复项，不进行额外排序。
 
-    Pass `sort=False` if index and columns should not be sorted, but concatenated
-    and get duplicates removed.
+    返回:
+        tp.Frame:
+            一个对称的Pandas DataFrame。其行索引和列索引相同，包含了输入 `arg`
+            原始行索引和列索引的所有唯一值。DataFrame中的值根据原始 `arg` 的值
+            及其转置进行填充，以实现对称性。
 
-    Usage:
-        ```pycon
+    要求:
+        - 如果输入 `arg` 是一个DataFrame，并且其行索引和列索引都是 `pd.MultiIndex` 类型，
+          那么这两个MultiIndex必须具有相同的层级数量（`nlevels`）。
+
+    示例:
         >>> import pandas as pd
-        >>> from vectorbt.base.reshape_fns import make_symmetric
+        >>> import numpy as np
+        >>> from vectorbt.base.reshape_fns import to_2d # 假设 to_2d 在此或已导入
+        >>> # from vectorbt.base.reshape_fns import make_symmetric # 假设在此
 
-        >>> df = pd.DataFrame([[1, 2], [3, 4]], index=['a', 'b'], columns=['c', 'd'])
-
-        >>> make_symmetric(df)
+        >>> # 示例1: 基本的DataFrame
+        >>> df1 = pd.DataFrame([[1, 2], [3, 4]], index=['a', 'b'], columns=['c', 'd'])
+        >>> print("原始DataFrame df1:")
+        >>> print(df1)
+        原始DataFrame df1:
+           c  d
+        a  1  2
+        b  3  4
+        >>> sym_df1 = make_symmetric(df1)
+        >>> print("\\n对称后的df1 (sort=True):")
+        >>> print(sym_df1) # 新索引将是 ['a', 'b', 'c', 'd']
+        对称后的df1 (sort=True):
              a    b    c    d
-        a  NaN  NaN  1.0  2.0
-        b  NaN  NaN  3.0  4.0
-        c  1.0  3.0  NaN  NaN
-        d  2.0  4.0  NaN  NaN
-        ```
+        a  NaN  NaN  1.0  2.0  # df1中 a行c列=1, a行d列=2
+        b  NaN  NaN  3.0  4.0  # df1中 b行c列=3, b行d列=4
+        c  1.0  3.0  NaN  NaN  # df1转置后 c行a列=1, c行b列=3
+        d  2.0  4.0  NaN  NaN  # df1转置后 d行a列=2, d行b列=4
+
+        >>> # 示例3: 输入为Series
+        >>> sr1 = pd.Series([1, 2, 3], index=pd.Index(['a', 'b', 'c'], name='my_idx'), name='my_series')
+        >>> print("\\n原始Series sr1:")
+        >>> print(sr1)
+        原始Series sr1:
+        my_idx
+        a    1
+        b    2
+        c    3
+        Name: my_series, dtype: int64
+        >>> sym_sr1 = make_symmetric(sr1) # Series会转为单列DataFrame，列名为'my_series'
+        >>> print("\\n对称后的sr1:")      # 新索引为 ['a', 'b', 'c', 'my_series'] (排序后)
+        >>> print(sym_sr1)
+        对称后的sr1:
+                   a    b    c  my_series
+        a        NaN  NaN  NaN        1.0
+        b        NaN  NaN  NaN        2.0
+        c        NaN  NaN  NaN        3.0
+        my_series  1.0  2.0  3.0        NaN
+
+        >>> # 示例4: MultiIndex (确保层级相同)
+        >>> idx_m1 = pd.MultiIndex.from_product([['A'], ['x', 'y']], names=['L1', 'L2'])
+        >>> col_m1 = pd.MultiIndex.from_product([['B'], ['z', 'w']], names=['L1', 'L2']) # 注意：层级名可以不同
+        >>> df_multi = pd.DataFrame([[1,2],[3,4]], index=idx_m1, columns=col_m1)
+        >>> print("\\n原始DataFrame df_multi:")
+        >>> print(df_multi)
+        原始DataFrame df_multi:
+        L1      B   
+        L2      z  w
+        L1 L2       
+        A  x    1  2
+           y    3  4
+        >>> sym_df_multi = make_symmetric(df_multi)
+        >>> print("\\n对称后的df_multi:")
+        >>> print(sym_df_multi) # 新的MultiIndex将合并(A,x), (A,y), (B,z), (B,w)并排序
+                                # 名称将是 (('L1','L1'), ('L2','L2'))
+        对称后的df_multi:
+        L1         A         B    
+        L2         x    y    z    w
+        L1 L2                      
+        A  x     NaN  NaN  1.0  2.0
+           y     NaN  NaN  3.0  4.0
+        B  z     1.0  3.0  NaN  NaN
+           w     2.0  4.0  NaN  NaN
     """
     checks.assert_instance_of(arg, (pd.Series, pd.DataFrame))
     df: tp.Frame = to_2d(arg)
@@ -1657,67 +1849,202 @@ def unstack_to_df(arg: tp.SeriesFrame,
                   column_levels: tp.Optional[tp.MaybeLevelSequence] = None,
                   symmetric: bool = False,
                   sort: bool = True) -> tp.Frame:
-    """Reshape `arg` based on its multi-index into a DataFrame.
-
-    Use `index_levels` to specify what index levels will form new index, and `column_levels` 
-    for new columns. Set `symmetric` to True to make DataFrame symmetric.
-
-    Usage:
-        ```pycon
+    """根据多级索引，将输入对象重塑为二维 DataFrame。
+    
+    该函数将具有多级索引（MultiIndex）的 Series 或 DataFrame 重新组织为二维表格形式，
+    通过指定哪些索引级别用于新 DataFrame 的行索引，哪些用于列索引，实现数据的重塑变换。
+    这是一种强大的数据透视方法，可以灵活地改变数据的查看维度。
+    
+    参数:
+        arg (tp.SeriesFrame): 
+            输入的 Pandas Series 或 DataFrame。要求其索引必须是多级索引（MultiIndex）。
+            如果输入是 DataFrame，必须能被转换为具有多级索引的 Series
+            （通常是单行或单列的 DataFrame）。
+            
+        index_levels (tp.Optional[tp.MaybeLevelSequence], 默认为 None): 
+            指定哪些索引级别将构成结果 DataFrame 的行索引。
+            可以是整数、字符串或它们的序列，用于从原始多级索引中选择级别。
+            - 整数表示级别的位置（从0开始）
+            - 字符串表示级别的名称（如果多级索引的级别已命名）
+            如果原始索引只有两个级别且此参数为 None，默认使用第一个级别（0）。
+            
+        column_levels (tp.Optional[tp.MaybeLevelSequence], 默认为 None): 
+            指定哪些索引级别将构成结果 DataFrame 的列索引。
+            格式与 index_levels 相同。
+            如果原始索引只有两个级别且此参数为 None，默认使用第二个级别（1）。
+            
+        symmetric (bool, 默认为 False): 
+            是否生成对称 DataFrame。
+            - 如果为 True，将使用 make_symmetric 函数将结果转换为对称 DataFrame，
+              其中行索引和列索引相同，包含所有选定索引级别的唯一值组合。
+            - 如果为 False，返回普通的重塑后的 DataFrame。
+            
+        sort (bool, 默认为 True): 
+            仅当 symmetric=True 时有效。指示在创建对称 DataFrame 时，
+            是否对合并后的行列索引进行排序。
+            
+    返回:
+        tp.Frame: 
+            重塑后的 DataFrame。
+            - 如果 symmetric=False，返回的 DataFrame 行索引来自 index_levels 指定的级别，
+              列索引来自 column_levels 指定的级别。
+            - 如果 symmetric=True，返回的 DataFrame 行索引和列索引相同，
+              包含从 index_levels 和 column_levels 选择的所有唯一值组合。
+            
+    异常:
+        ValueError: 
+            - 如果原始索引超过两个级别，但未指定 index_levels 或 column_levels。
+            - 如果输入无法转换为具有多级索引的 Series。
+            
+    示例:
         >>> import pandas as pd
         >>> from vectorbt.base.reshape_fns import unstack_to_df
-
+        >>> 
+        >>> # 创建一个具有三级索引的 Series
         >>> index = pd.MultiIndex.from_arrays(
         ...     [[1, 1, 2, 2], [3, 4, 3, 4], ['a', 'b', 'c', 'd']],
         ...     names=['x', 'y', 'z'])
         >>> sr = pd.Series([1, 2, 3, 4], index=index)
-
-        >>> unstack_to_df(sr, index_levels=(0, 1), column_levels=2)
+        >>> 
+        >>> # 将 x 和 y 级别用作行索引，z 级别用作列索引
+        >>> df1 = unstack_to_df(sr, index_levels=(0, 1), column_levels=2)
+        >>> print(df1)
         z      a    b    c    d
-        x y
+        x y                    
         1 3  1.0  NaN  NaN  NaN
-        1 4  NaN  2.0  NaN  NaN
+          4  NaN  2.0  NaN  NaN
         2 3  NaN  NaN  3.0  NaN
-        2 4  NaN  NaN  NaN  4.0
-        ```
+          4  NaN  NaN  NaN  4.0
+        >>> 
+        >>> # 创建对称 DataFrame
+        >>> df2 = unstack_to_df(sr, index_levels=0, column_levels=1, symmetric=True)
+        >>> print(df2)
+             3    4
+        1  NaN  NaN
+        2  NaN  NaN
+        3  1.0  2.0
+        4  3.0  4.0
     """
-    # Extract series
+    # 从输入参数提取 Series
+    # 使用 to_1d 确保获得一维序列，get_multiindex_series 确保具有多级索引
     sr: tp.Series = to_1d(get_multiindex_series(arg))
-
+    
+    # 当索引级别数大于2时，必须明确指定 index_levels 和 column_levels
     if len(sr.index.levels) > 2:
         if index_levels is None:
             raise ValueError("index_levels must be specified")
         if column_levels is None:
             raise ValueError("column_levels must be specified")
     else:
+        # 对于仅有两个级别的索引，默认使用第一个级别作为行索引，第二个级别作为列索引
         if index_levels is None:
             index_levels = 0
         if column_levels is None:
             column_levels = 1
-
-    # Build new index and column hierarchies
+    
+    # 构建新的行索引和列索引层次结构
+    # select_levels 从多级索引中选择指定级别，unique() 确保索引值不重复
     new_index = index_fns.select_levels(arg.index, index_levels).unique()
     new_columns = index_fns.select_levels(arg.index, column_levels).unique()
-
-    # Unstack and post-process
+    
+    # 执行重塑操作并进行后处理
+    # unstack_to_array 将 Series 重塑为 NumPy 数组，指定使用哪些级别
     unstacked = unstack_to_array(sr, levels=(index_levels, column_levels))
+    # 创建 DataFrame，使用前面生成的新行索引和列索引
     df = pd.DataFrame(unstacked, index=new_index, columns=new_columns)
+    
+    # 如果要求对称，调用 make_symmetric 函数处理结果
+    # 对称 DataFrame 的行索引和列索引完全相同
     if symmetric:
         return make_symmetric(df, sort=sort)
+    # 否则直接返回重塑后的 DataFrame
     return df
 
 
 @njit(cache=True)
 def flex_choose_i_and_col_nb(a: tp.Array, flex_2d: bool = True) -> tp.Tuple[int, int]:
-    """Choose selection index and column based on the array's shape.
+    """
+    根据输入数组 `a` 的形状，智能选择用于灵活索引的行索引 `i` 和列索引 `col`。
 
-    Instead of expensive broadcasting, keep the original shape and do indexing in a smart way.
-    A nice feature of this is that it has almost no memory footprint and can broadcast in
-    any direction infinitely.
+    该函数旨在与 `flex_select_nb` 配合使用，通过预先确定基准的行、列索引，
+    使得 `flex_select_nb` 能够以低内存占用的方式，模拟 NumPy 的广播行为来选取元素。
+    它避免了显式地将数组广播到目标形状，从而节省内存，并能处理任意方向的无限广播。
 
-    Call it once before using `flex_select_nb`.
+    参数:
+        a (tp.Array):
+            输入的 NumPy 数组。可以是0维（标量）、1维或2维数组。
+        flex_2d (bool, optional):
+            一个布尔标志，用于控制当输入数组 `a` 是一维时如何解释其维度。默认为 `True`。
+            - 如果 `flex_2d` 为 `True`（默认）：一维数组将被视为“列向量”或沿列扩展的数组。
+              这意味着行索引 `i` 将被固定（通常为0），而列索引 `col` 将根据数组的实际长度而变化（如果长度为1则为0，否则为-1表示灵活）。
+            - 如果 `flex_2d` 为 `False`：一维数组将被视为“行向量”或沿行扩展的数组。
+              这意味着列索引 `col` 将被固定（通常为0），而行索引 `i` 将根据数组的实际长度而变化（如果长度为1则为0，否则为-1表示灵活）。
 
-    if `flex_2d` is True, 1-dim array will correspond to columns, otherwise to rows."""
+    返回:
+        tp.Tuple[int, int]:
+            一个包含两个整数的元组 `(i, col)`:
+            - `i`: 选择的基准行索引。如果为 -1，表示行索引是灵活的，应由 `flex_select_nb` 中的 `flex_i` 决定。
+                   如果为 0，表示行索引固定为0（除非数组特定维度长度为1）。
+            - `col`: 选择的基准列索引。如果为 -1，表示列索引是灵活的，应由 `flex_select_nb` 中的 `flex_col` 决定。
+                     如果为 0，表示列索引固定为0（除非数组特定维度长度为1）。
+
+    工作原理:
+        - 对于0维数组 (标量): 行索引 `i` 和列索引 `col` 都设置为0，因为标量可以广播到任何形状的单个值。
+        - 对于1维数组:
+            - 如果 `flex_2d` 为 `True`:
+                - 行索引 `i` 设置为0。
+                - 如果数组长度为1 (例如 `np.array([x])`)，列索引 `col` 设置为0 (视为单元素列)。
+                - 否则 (数组长度大于1)，列索引 `col` 设置为-1 (表示列是灵活的，可以沿列广播)。
+            - 如果 `flex_2d` 为 `False`:
+                - 列索引 `col` 设置为0。
+                - 如果数组长度为1，行索引 `i` 设置为0 (视为单元素行)。
+                - 否则，行索引 `i` 设置为-1 (表示行是灵活的，可以沿行广播)。
+        - 对于2维数组:
+            - 如果数组的行数（`a.shape[0]`）为1，行索引 `i` 设置为0。否则，`i` 保持为-1 (灵活行)。
+            - 如果数组的列数（`a.shape[1]`）为1，列索引 `col` 设置为0。否则，`col` 保持为-1 (灵活列)。
+
+    示例:
+        >>> import numpy as np
+        >>> # from numba import njit # 假设 njit 已经导入
+        >>> # @njit # 为了直接运行示例，暂时注释掉njit
+        ... # def flex_choose_i_and_col_nb(a: np.ndarray, flex_2d: bool = True) -> tuple[int, int]:
+        ... #     # ... 函数体 ...
+
+        >>> # 0D array (标量)
+        >>> arr_0d = np.array(5)
+        >>> flex_choose_i_and_col_nb(arr_0d)
+        (0, 0)
+
+        >>> # 1D array, flex_2d=True (默认，视为列)
+        >>> arr_1d_col = np.array([1, 2, 3])
+        >>> flex_choose_i_and_col_nb(arr_1d_col) # i=0 (固定行), col=-1 (灵活列)
+        (0, -1)
+        >>> arr_1d_single_col = np.array([10])
+        >>> flex_choose_i_and_col_nb(arr_1d_single_col) # i=0, col=0 (单元素列)
+        (0, 0)
+
+        >>> # 1D array, flex_2d=False (视为行)
+        >>> arr_1d_row = np.array([4, 5, 6])
+        >>> flex_choose_i_and_col_nb(arr_1d_row, flex_2d=False) # i=-1 (灵活行), col=0 (固定列)
+        (-1, 0)
+        >>> arr_1d_single_row = np.array([20])
+        >>> flex_choose_i_and_col_nb(arr_1d_single_row, flex_2d=False) # i=0, col=0 (单元素行)
+        (0, 0)
+
+        >>> # 2D array
+        >>> arr_2d_full = np.array([[1, 2], [3, 4]])
+        >>> flex_choose_i_and_col_nb(arr_2d_full) # i=-1, col=-1 (行列都灵活)
+        (-1, -1)
+        >>> arr_2d_row_vec = np.array([[1, 2, 3]]) # 1行N列
+        >>> flex_choose_i_and_col_nb(arr_2d_row_vec) # i=0 (固定行), col=-1 (灵活列)
+        (0, -1)
+        >>> arr_2d_col_vec = np.array([[1], [2], [3]]) # N行1列
+        >>> flex_choose_i_and_col_nb(arr_2d_col_vec) # i=-1 (灵活行), col=0 (固定列)
+        (-1, 0)
+        >>> arr_2d_single_element = np.array([[5]]) # 1行1列
+        >>> flex_choose_i_and_col_nb(arr_2d_single_element) # i=0, col=0 (单元素二维数组)
+        (0, 0)
+    """
     i = -1
     col = -1
     if a.ndim == 0:
@@ -1742,22 +2069,148 @@ def flex_choose_i_and_col_nb(a: tp.Array, flex_2d: bool = True) -> tp.Tuple[int,
 
 @njit(cache=True)
 def flex_select_nb(a: tp.Array, i: int, col: int, flex_i: int, flex_col: int, flex_2d: bool = True) -> tp.Any:
-    """Select element of `a` as if it has been broadcast."""
+    """
+    以广播方式从数组 `a` 中灵活选择元素，无需实际执行广播操作。
+    
+    此函数模拟 NumPy 广播机制，但不实际创建广播后的数组，从而节省内存。
+    它可用于高效地从数组中提取元素，就像数组已经被广播到目标形状一样。
+    
+    参数:
+        a (tp.Array): 
+            输入的数组，可以是0维(标量)、1维或2维数组。
+        i (int): 
+            目标行索引。当需要从2维目标形状中选择元素时使用。
+        col (int): 
+            目标列索引。当需要从2维目标形状中选择元素时使用。
+        flex_i (int): 
+            灵活的行索引指示器。
+            如果为-1，表示使用 `i` 作为实际行索引；否则直接使用 flex_i 值。
+        flex_col (int): 
+            灵活的列索引指示器。
+            如果为-1，表示使用 `col` 作为实际列索引；否则直接使用 flex_col 值。
+        flex_2d (bool, optional): 
+            控制如何处理1维数组。默认为 True。
+            - 当为 True 时：将1维数组视为列向量，使用 flex_col 作为索引
+            - 当为 False 时：将1维数组视为行向量，使用 flex_i 作为索引
+    
+    返回:
+        tp.Any: 
+            从数组 `a` 中选择的元素值。
+    
+    示例:
+        >>> import numpy as np
+        >>> from numba import njit
+        >>> from vectorbt.base.reshape_fns import flex_select_nb
+        >>> 
+        >>> # 示例1：从0维数组(标量)选择元素
+        >>> a_scalar = np.array(5)
+        >>> flex_select_nb(a_scalar, 0, 0, 0, 0)
+        5
+        >>> 
+        >>> # 示例2：从1维数组选择元素(作为列向量处理)
+        >>> a_1d = np.array([10, 20, 30])
+        >>> flex_select_nb(a_1d, 0, 1, 0, -1, flex_2d=True)  # 返回索引1处的元素
+        20
+        >>> 
+        >>> # 示例3：从1维数组选择元素(作为行向量处理)
+        >>> flex_select_nb(a_1d, 1, 0, -1, 0, flex_2d=False)  # 返回索引1处的元素
+        20
+        >>> 
+        >>> # 示例4：从2维数组选择元素
+        >>> a_2d = np.array([[1, 2, 3], [4, 5, 6]])
+        >>> flex_select_nb(a_2d, 0, 2, -1, -1)  # 返回位置[0,2]的元素
+        3
+        >>> flex_select_nb(a_2d, 1, 1, -1, -1)  # 返回位置[1,1]的元素
+        5
+    """
+    # 如果灵活行索引为-1，则使用目标行索引i替代
     if flex_i == -1:
         flex_i = i
+    
+    # 如果灵活列索引为-1，则使用目标列索引col替代
     if flex_col == -1:
         flex_col = col
+    
+    # 处理0维数组(标量)：直接返回该标量值
     if a.ndim == 0:
         return a.item()
+    
+    # 处理1维数组：根据flex_2d参数决定如何索引
     if a.ndim == 1:
         if flex_2d:
+            # 当flex_2d为True时，将1维数组视为列向量，使用flex_col作为索引
             return a[flex_col]
+        # 当flex_2d为False时，将1维数组视为行向量，使用flex_i作为索引
         return a[flex_i]
+    
+    # 处理2维数组：使用[flex_i, flex_col]作为行列索引
     return a[flex_i, flex_col]
 
 
 @njit(cache=True)
 def flex_select_auto_nb(a: tp.Array, i: int, col: int, flex_2d: bool = True) -> tp.Any:
-    """Combines `flex_choose_i_and_col_nb` and `flex_select_nb`."""
+    """
+    对于数组 a，当 (i, col) 可能超出了 a 的索引范围：
+        当这种情况发生时，可以想象将 a 沿行/列进行延申（广播），然后在这个想象的广播后的数组中按照索引(i, col)取值
+    自动确定数组维度并灵活选择元素，无需实际执行广播操作，高效节省内存。
+    
+    此函数是 `flex_choose_i_and_col_nb` 和 `flex_select_nb` 的组合封装，用于自动处理数组的维度特性。
+    它首先确定输入数组的最佳索引方式，然后以广播方式选择元素，而无需实际创建广播后的数组。
+    
+    参数:
+        a (tp.Array): 
+            输入数组，可以是0维(标量)、1维或2维数组。此数组的元素将被选择性地返回。
+            
+        i (int): 
+            目标行索引。当需要从2维目标形状中选择元素时使用。例如，从广播后的形状为(5,3)的
+            结果中选择第2行元素，则i=2。
+            
+        col (int): 
+            目标列索引。当需要从2维目标形状中选择元素时使用。例如，从广播后的形状为(5,3)的
+            结果中选择第1列元素，则col=1。
+            
+        flex_2d (bool, optional): 
+            控制如何处理1维数组。默认为True。
+            - 当为True时：将1维数组视为列向量(形状为(n,1))，数组沿着列方向扩展
+            - 当为False时：将1维数组视为行向量(形状为(1,n))，数组沿着行方向扩展
+    
+    返回:
+        tp.Any: 
+            从数组 `a` 中选择的元素值，相当于从广播后的数组 `a` 中取 `[i, col]` 位置的值。
+    
+    示例:
+        >>> import numpy as np
+        >>> from vectorbt.base.reshape_fns import flex_select_auto_nb
+        >>> 
+        >>> # 示例1：从标量选择元素 (会返回标量值本身)
+        >>> a_scalar = np.array(5)
+        >>> flex_select_auto_nb(a_scalar, 2, 3)  # 无论i和col是什么，都返回5
+        5
+        >>> 
+        >>> # 示例2：从一维数组选择元素 (默认视为列向量)
+        >>> a_1d = np.array([10, 20, 30])
+        >>> flex_select_auto_nb(a_1d, 0, 1)  # 返回索引1处的元素 (20)
+        20
+        >>> flex_select_auto_nb(a_1d, 0, 2)  # 返回索引2处的元素 (30)
+        30
+        >>> 
+        >>> # 示例3：从一维数组选择元素 (视为行向量)
+        >>> flex_select_auto_nb(a_1d, 1, 0, flex_2d=False)  # 返回索引1处的元素 (20)
+        20
+        >>> flex_select_auto_nb(a_1d, 2, 0, flex_2d=False)  # 返回索引2处的元素 (30)
+        30
+        >>> 
+        >>> # 示例4：从二维数组选择元素
+        >>> a_2d = np.array([[1, 2, 3], [4, 5, 6]])
+        >>> flex_select_auto_nb(a_2d, 0, 2)  # 返回位置[0,2]的元素 (3)
+        3
+        >>> flex_select_auto_nb(a_2d, 1, 1)  # 返回位置[1,1]的元素 (5)
+        5
+    """
+    # 根据输入数组a的形状和flex_2d参数，自动确定最佳的索引方式
+    # 返回flex_i和flex_col，用于指示如何处理行和列的广播
     flex_i, flex_col = flex_choose_i_and_col_nb(a, flex_2d)
+    
+    # 使用确定的索引方式从数组a中选择元素
+    # 相当于从广播后的数组中选择[i,col]位置的元素
     return flex_select_nb(a, i, col, flex_i, flex_col, flex_2d)

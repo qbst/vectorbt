@@ -923,7 +923,7 @@ def align_index_to(index1: tp.Index, index2: tp.Index) -> pd.IndexSlice:
     return pd.IndexSlice[_align_index_to_nb(unique1, unique2)]
 
 
-def align_indexes(indexes: tp.Sequence[tp.Index]) -> tp.List[tp.IndexSlice]:
+def align_indexes(indexes: tp.Sequence[tp.Index]) -> tp.List[tp.Index]:
     """
     将序列 `indexes` 中的多个 Pandas 索引对象相互对齐。
     返回[i]对应：indexes中最长（可能很多个）且最前能够对齐到Indexindexs[i]的IndexSlice

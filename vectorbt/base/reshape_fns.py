@@ -1,10 +1,58 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""Functions for reshaping arrays.
+"""
+================================================================================
+VECTORBT BASE MODULE: RESHAPE FUNCTIONS
+================================================================================
 
-Reshape functions transform a pandas object/NumPy array in some way, such as tiling, broadcasting,
-and unstacking."""
+文件作用概述：
+本文件是vectorbt库中专门处理数组重塑、广播和数据结构转换的核心模块。在量化交易数据分析中，
+经常需要处理不同形状、维度和类型的数据，将它们统一转换为兼容的格式进行计算，该模块正是
+为了解决这类数据对齐和结构转换问题而设计的基础设施。
+
+核心设计理念：
+1. **数据类型统一化**：提供to_any_array、to_pd_array等转换函数，在NumPy数组和Pandas
+   对象之间建立无缝桥梁，确保vectorbt库内部数据处理的一致性。
+
+2. **智能维度调整**：通过soft_to_ndim、to_1d、to_2d等函数，实现数组维度的智能转换，
+   在保持数据语义的前提下适配不同计算函数的输入要求。
+
+3. **高级广播机制**：实现比NumPy更强大的broadcast系列函数，支持Pandas对象的索引对齐、
+   列名匹配和元数据保持，为复杂数据结构的向量化计算提供基础。
+
+4. **灵活的数据重构**：提供repeat、tile等数据扩展函数，以及unstack_to_array、
+   make_symmetric等数据重构函数，满足量化分析中多样化的数据排列需求。
+
+主要功能模块：
+- **类型转换系列**：to_any_array, to_pd_array, to_dict等基础类型转换函数
+- **维度调整系列**：soft_to_ndim, to_1d, to_2d等维度标准化函数
+- **数据扩展系列**：repeat, tile等数据重复和平铺函数
+- **广播对齐系列**：broadcast, broadcast_to等智能广播函数
+- **结构重塑系列**：unstack_to_array, make_symmetric等数据重构函数
+- **Numba优化系列**：flex_select_nb等高性能数据选择函数
+
+典型应用场景：
+- **多资产数据对齐**：将不同长度的价格序列广播到统一的时间框架
+- **指标计算预处理**：将标量参数扩展为与价格数据相同形状的数组
+- **回测结果整理**：将不同维度的策略输出重塑为标准的DataFrame格式
+- **相关性分析**：将非对称的相关性矩阵转换为对称格式便于分析
+- **多周期数据处理**：在不同时间框架的数据间进行形状对齐和广播
+
+技术特点：
+- 完美集成NumPy广播规则，同时扩展支持Pandas索引和元数据处理
+- 提供raw参数控制，允许在保持Pandas特性和转换为NumPy之间灵活选择
+- 智能的索引对齐算法，自动处理复杂的多级索引匹配和列名对应
+- 集成Numba加速的数据选择函数，为大规模数据处理提供性能保障
+- 兼容vectorbt的配置系统，支持全局行为定制和优化策略选择
+
+与其他模块的协作：
+- 与index_fns模块深度集成，共同实现复杂的索引对齐和广播操作
+- 为combine_fns模块的批量计算提供数据预处理和结果后处理支持
+- 与column_grouper协作处理分组数据的形状标准化
+- 作为vectorbt高级数据结构（如ArrayWrapper）的底层重塑引擎
+- 为整个vectorbt生态系统提供数据类型和维度的标准化基础
+"""
 
 import functools
 from collections.abc import Sequence
@@ -121,7 +169,7 @@ def soft_to_ndim(arg: tp.ArrayLike, ndim: int, raw: bool = False) -> tp.AnyArray
     """
     尝试将输入 `arg` 柔和地转换为指定维度 `ndim` (最大为2)。
 
-    “柔和转换”意味着函数会尝试在不改变数据内容的前提下，通过改变数组的形状属性
+    "柔和转换"意味着函数会尝试在不改变数据内容的前提下，通过改变数组的形状属性
     (例如，将一个单列的二维数组转换为一维数组，或者反之)来达到目标维度。
     它主要处理一维和二维数组之间的转换。
 
@@ -1279,7 +1327,7 @@ def broadcast_to(arg1: tp.ArrayLike,
     """
     将 `arg1` 广播（broadcast）到 `arg2` 的形状，并可选择保留/恢复为 pandas 对象。
 
-    该函数是 `broadcast` 的简化接口，常用于将一个标量、数组、Series、DataFrame等“对齐”到另一个对象的形状和索引/列。
+    该函数是 `broadcast` 的简化接口，常用于将一个标量、数组、Series、DataFrame等"对齐"到另一个对象的形状和索引/列。
     广播时会自动处理 numpy/pandas 类型的转换，并可根据参数决定是否保留 pandas 的 index/columns 信息。
 
     参数说明：
@@ -1570,7 +1618,7 @@ def unstack_to_array(arg: tp.SeriesFrame, levels: tp.Optional[tp.MaybeLevelSeque
     将具有多级索引的Pandas Series或DataFrame根据指定的索引级别重塑为一个多维NumPy数组。
 
     此函数的核心功能是将扁平化的Series/DataFrame数据，根据其MultiIndex的结构，
-    “展开”成一个具有与索引层级对应维度的高维数组。缺失值将由NaN填充。
+    "展开"成一个具有与索引层级对应维度的高维数组。缺失值将由NaN填充。
 
     参数:
         arg (tp.SeriesFrame): 
@@ -1650,7 +1698,7 @@ def unstack_to_array(arg: tp.SeriesFrame, levels: tp.Optional[tp.MaybeLevelSeque
 
     # 初始化两个列表：
     # unique_idx_list: 用于存储每个被选中进行unstack的索引级别中的唯一值数组。
-    #                  这些唯一值将决定新NumPy数组对应维度的大小和“刻度”。
+    #                  这些唯一值将决定新NumPy数组对应维度的大小和"刻度"。
     # vals_idx_list: 用于存储原始Series中每个数据点，在其对应的每个被选中的索引级别上，
     #                的索引值在unique_idx_list中对应级别唯一值数组中的整数位置。
     #                这些整数位置将作为填充新NumPy数组时的坐标。
@@ -1667,7 +1715,7 @@ def unstack_to_array(arg: tp.SeriesFrame, levels: tp.Optional[tp.MaybeLevelSeque
     for level in levels:
         # 从Series的MultiIndex中提取当前level的所有索引值，并转换为NumPy数组
         vals = index_fns.select_levels(sr.index, level).to_numpy()
-        # 找到当前level中的所有唯一索引值，这些唯一值将构成新数组在此维度上的“刻度”
+        # 找到当前level中的所有唯一索引值，这些唯一值将构成新数组在此维度上的"刻度"
         unique_vals = np.unique(vals)
         # 将当前level的唯一值数组存入unique_idx_list
         unique_idx_list.append(unique_vals)

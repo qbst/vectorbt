@@ -1,12 +1,58 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""Functions for combining arrays.
+"""
+================================================================================
+VECTORBT BASE MODULE: COMBINE FUNCTIONS
+================================================================================
 
-Combine functions combine two or more NumPy arrays using a custom function. The emphasis here is
-done upon stacking the results into one NumPy array - since vectorbt is all about brute-forcing
-large spaces of hyperparameters, concatenating the results of each hyperparameter combination into
-a single DataFrame is important. All functions are available in both Python and Numba-compiled form."""
+文件作用概述：
+本文件是vectorbt库中专门用于数组组合和批量函数应用的高性能计算引擎。该模块是vectorbt
+实现大规模参数扫描、批量回测和分布式计算的核心基础设施，为量化交易中常见的"暴力搜索"
+超参数空间提供了强大的计算支持。
+
+核心设计理念：
+1. **批量计算优化**：通过apply_and_concat系列函数，将单次函数调用扩展为批量并行调用，
+   然后高效地将结果连接成单一数组，避免循环开销和内存碎片化。
+
+2. **多层性能优化**：提供三个性能层次的实现：
+   - Python原生版本：功能完整，支持进度条和复杂参数传递
+   - Numba编译版本：极致性能，适用于数值密集型计算
+   - Ray分布式版本：利用多核/多机资源，处理超大规模计算任务
+
+3. **灵活的结果组织**：支持单输出和多输出函数的批量处理，自动处理结果的维度标准化
+   和列向连接，确保输出格式的一致性和可预测性。
+
+4. **组合与聚合模式**：提供combine_and_concat等函数，实现一对多的组合计算模式，
+   以及combine_multiple等函数实现链式组合计算。
+
+主要功能模块：
+- **单输出批量处理**：apply_and_concat_one系列，用于批量应用返回单个数组的函数
+- **多输出批量处理**：apply_and_concat_multiple系列，用于批量应用返回多个数组的函数  
+- **组合计算模式**：combine_and_concat系列，实现基准对象与多个目标对象的组合计算
+- **分布式计算支持**：ray_apply及其衍生函数，提供基于Ray的分布式并行计算
+- **性能优化工具**：Numba编译版本，为数值计算提供接近C语言的执行速度
+
+典型应用场景：
+- **策略参数优化**：对数百/数千个参数组合进行批量回测，寻找最优参数
+- **技术指标批量计算**：同时计算多个周期的移动平均线、RSI、MACD等指标
+- **多资产组合分析**：并行计算不同股票组合的风险收益特征  
+- **敏感性分析**：评估策略对不同市场条件或参数变化的敏感程度
+- **蒙特卡洛模拟**：进行大规模随机模拟，评估策略的统计特性
+
+技术特点：
+- 深度集成Numba JIT编译，核心循环达到接近C语言的执行速度
+- 原生支持Ray分布式计算框架，轻松扩展到多机集群
+- 智能的内存管理，通过预分配避免动态内存分配的开销
+- 完整的进度监控和任务管理，支持长时间运行的大型计算任务
+- 与numpy broadcasting完美集成，自动处理维度转换和数组对齐
+
+与其他模块的协作：
+- 使用reshape_fns模块的to_2d等函数确保输出数组格式的一致性
+- 与column_grouper协作处理分组计算和聚合操作
+- 为vectorbt高层API（如指标计算、策略回测）提供底层计算引擎
+- 作为vectorbt性能优化的核心组件，支撑整个库的高性能特性
+"""
 
 import numpy as np
 from numba import njit

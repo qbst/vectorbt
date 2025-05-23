@@ -1065,6 +1065,7 @@ class Configured(Pickleable, Documented):
         from vectorbt._settings import settings
         configured_cfg = settings['configured']
 
+        # 将传入的 config 和 configured_cfg['config'] 合并存到 self._config 中
         self._config = Config(config, **configured_cfg['config'])
 
     @property

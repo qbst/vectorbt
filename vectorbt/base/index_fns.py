@@ -1,10 +1,55 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""Functions for working with index/columns.
+"""
+================================================================================
+VECTORBT BASE MODULE: INDEX FUNCTIONS
+================================================================================
 
-Index functions perform operations on index objects, such as stacking, combining,
-and cleansing MultiIndex levels. "Index" in pandas context is referred to both index and columns."""
+文件作用概述：
+本文件是vectorbt库中处理pandas索引对象的核心工具集，为复杂的索引操作提供了完整的基础设施。
+在量化交易数据处理中，经常需要处理多维时间序列数据、多资产数据和多策略结果，这些数据
+通常具有复杂的多级索引结构，该模块正是为了高效处理这些索引操作而设计。
+
+核心设计理念：
+1. **索引标准化与转换**：提供to_any_index等函数，统一不同类型索引对象的处理方式，
+   确保整个库的索引操作具有一致的接口和行为。
+
+2. **多级索引管理**：专门针对MultiIndex提供了丰富的操作函数，包括级别选择、堆叠、
+   组合、重命名等，满足复杂数据结构的索引管理需求。
+
+3. **高性能索引操作**：使用Numba JIT编译的核心算法，如_align_index_to_nb，
+   为大规模数据的索引对齐提供极致的性能优化。
+
+4. **广播兼容的索引处理**：与numpy广播机制完美集成，支持索引的重复、平铺、
+   组合等操作，为vectorbt的向量化计算提供索引层面的支持。
+
+主要功能模块：
+- **索引转换与标准化**：to_any_index, index_from_values等基础转换函数
+- **索引生成与扩展**：repeat_index, tile_index等索引扩展操作  
+- **索引组合与堆叠**：stack_indexes, combine_indexes等组合操作
+- **索引清理与优化**：drop_redundant_levels, drop_duplicate_levels等清理函数
+- **索引对齐与匹配**：align_index_to, align_indexes等对齐算法
+- **级别管理与选择**：select_levels, pick_levels等级别操作函数
+
+应用场景：
+- **多时间框架分析**：处理不同时间周期（1分钟、5分钟、日线等）数据的索引对齐
+- **多资产组合分析**：管理包含股票代码、行业分类、地区信息的复杂索引结构
+- **策略回测优化**：处理包含策略参数、时间维度、资产维度的多级索引
+- **风险因子分析**：管理因子名称、时间序列、资产标识的多维索引结构
+
+技术特点：
+- 完全兼容pandas索引API，同时提供增强功能
+- 使用Numba加速关键路径，显著提升大数据量下的处理性能
+- 提供灵活的默认索引处理策略，支持自动优化和手动控制
+- 集成vectorbt的全局配置系统，支持行为定制
+
+与其他模块的协作：
+- 为column_grouper提供级别选择和索引转换的底层支持
+- 与reshape_fns协作实现数据重构时的索引广播和对齐
+- 为combine_fns的批量操作提供索引管理基础设施
+- 作为vectorbt所有高级数据结构（ArrayWrapper等）的索引基础
+"""
 
 from datetime import datetime, timedelta
 
@@ -127,7 +172,7 @@ def repeat_index(index: tp.IndexLike, n: int, ignore_default: tp.Optional[bool] 
             每个索引元素需要重复的次数。必须为非负整数。
             如果 n 为 0，则返回空索引。
         ignore_default: tp.Optional[bool], 默认值: None
-            一个布尔值，指示是否应特殊处理“默认”索引（即，无名称的 `pd.RangeIndex`，通常从0开始，步长为1）。
+            一个布尔值，指示是否应特殊处理"默认"索引（即，无名称的 `pd.RangeIndex`，通常从0开始，步长为1）。
             - 如果为 `True`，并且输入 `index` 是一个默认索引，则函数将返回一个新的 `pd.RangeIndex`，
               其长度为 `len(index) * n`，而不是重复原始索引的值。
             - 如果为 `False`，则即使是默认索引，其值也会被重复。
@@ -562,7 +607,7 @@ def select_levels(index: tp.Index, level_names: tp.MaybeLevelSequence) -> tp.Ind
 
 def drop_redundant_levels(index: tp.Index) -> tp.Index:
     """
-    删除 Pandas 索引（尤其是 MultiIndex）中被认为是“冗余”的级别。
+    删除 Pandas 索引（尤其是 MultiIndex）中被认为是"冗余"的级别。
 
     冗余级别主要指那些不提供额外区分信息或其值模式与默认生成的索引相似的级别。
     具体来说，以下类型的级别被视为冗余：
@@ -978,7 +1023,7 @@ def pick_levels(index: tp.Index,
                 required_levels: OptionalLevelSequence = None,
                 optional_levels: OptionalLevelSequence = None) -> tp.Tuple[tp.List[int], tp.List[int]]:
     """
-    从多级索引 (MultiIndex) 中根据用户指定的“必需级别”和“可选级别”列表，
+    从多级索引 (MultiIndex) 中根据用户指定的"必需级别"和"可选级别"列表，
     智能地选择并返回这些级别在原始索引中的整数位置。
 
     该函数主要用于当用户需要从一个多级索引中提取特定子集级别进行操作时，
@@ -993,13 +1038,13 @@ def pick_levels(index: tp.Index,
             一个序列，定义了必须被选择的级别。序列中的每个元素可以是：
             - 级别名称 (str): 例如 'level_name'。
             - 级别整数位置 (int): 例如 0, 1, -1 (表示最后一个级别)。
-            - None: 表示该“必需”槽位将从 `index` 中尚未被其他指定级别占用的级别里按顺序自动选择一个。
+            - None: 表示该"必需"槽位将从 `index` 中尚未被其他指定级别占用的级别里按顺序自动选择一个。
             如果 `required_levels` 本身为 `None` 或空列表，则表示没有显式指定的必需级别。
         optional_levels: OptionalLevelSequence, 默认值: None
             一个序列，定义了可选的级别。序列中的每个元素可以是：
             - 级别名称 (str)。
             - 级别整数位置 (int)。
-            - None: 表示该“可选”槽位将被忽略，即不选择任何级别来填充它。
+            - None: 表示该"可选"槽位将被忽略，即不选择任何级别来填充它。
             如果 `optional_levels` 本身为 `None` 或空列表，则表示没有可选级别。
 
     返回:

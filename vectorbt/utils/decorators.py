@@ -43,7 +43,7 @@ from vectorbt.utils.config import Config
 
 
 class class_or_instancemethod(classmethod):
-    '''classmethod本身就是一个描述符，这里又实现了描述符协议的__get__方法，所以实际上是双重描述符'''
+    '''参考externalLib/vectorbt/vectorbt/笔记/utils/decorators.ipynb'''
     def __get__(self, instance: object, owner: tp.Optional[tp.Type] = None) -> tp.Any:
         descr_get = super().__get__ if instance is None else self.__func__.__get__
         return descr_get(instance, owner)

@@ -119,189 +119,279 @@ class custom_property:
 
 
 class CacheCondition(tp.NamedTuple):
-    """Caching condition for the use in `should_cache`."""
-
+    """
+    缓存条件类，用于 `should_cache` 函数中定义缓存策略的条件。
+    
+    该类继承自 NamedTuple，用于封装各种缓存条件参数，通过这些条件可以控制哪些方法或属性应该被缓存。
+    条件的匹配遵循优先级排序，越具体的条件优先级越高。
+    
+    例子：
+        # 针对特定实例和方法的缓存条件
+        condition1 = CacheCondition(instance=my_obj, func='calculate')
+    
+    条件优先级排序（数字越小优先级越高）：
+        0) instance + func：最具体的条件，针对特定实例的特定方法
+        1) instance + flags：针对特定实例的带标志方法
+        2) instance：针对特定实例的所有方法
+        3) cls + func：针对特定类的特定方法
+        4) cls + flags：针对特定类的带标志方法
+        5) cls：针对特定类的所有方法
+        6) base_cls + func：针对基类的特定方法
+        7) base_cls + flags：针对基类的带标志方法
+        8) base_cls：针对基类的所有方法
+        9) func + flags：针对带标志的特定方法
+        10) func：针对特定方法
+        11) flags：针对带特定标志的所有方法
+    """
     instance: tp.Optional[object] = None
-    """Class instance the method/property is bound to."""
-
     func: tp.Optional[tp.Union[tp.Callable, "cached_property", str]] = None
-    """Method/property or its name (case-sensitive)."""
-
     cls: tp.Optional[tp.Union[type, str]] = None
-    """Class of the instance or its name (case-sensitive)."""
-
     base_cls: tp.Optional[tp.Union[type, str]] = None
-    """Base class of the class or its name (case-sensitive)."""
-
     flags: tp.Optional[dict] = None
-    """Flags to check for in method/property's flags."""
-
     rank: tp.Optional[int] = None
-    """Rank to override the default rank."""
-
 
 def should_cache(func_name: str, instance: object, func: tp.Optional[tp.Callable] = None, **flags) -> bool:
-    """Check whether to cache the method/property based on a range of conditions defined under
-    `caching` in `vectorbt._settings.settings`.
-
-    Each condition has its own rank. A narrower condition has a lower (better) rank than a broader condition.
-    All supplied keys are checked, and if any condition fails, it's assigned to the highest (worst) rank.
-
-    Here's the condition ranking:
-
-    0) `instance` and `func`
-    1) `instance` and `flags`
-    2) `instance`
-    3) `cls` and `func`
-    4) `cls` and `flags`
-    5) `cls`
-    6) `base_cls` and `func`
-    7) `base_cls` and `flags`
-    8) `base_cls`
-    9) `func` and `flags`
-    10) `func`
-    11) `flags`
-    
-    This function goes through all conditions of type `CacheCondition` in `whitelist` and `blacklist`
-    and finds the one with the lowest (best) rank. If the search yields the same rank for both lists,
-    global caching flag `enabled` decides.
-
-    Usage:
-        * Let's evaluate various caching conditions:
-
-        ```pycon
-        >>> import vectorbt as vbt
-
-        >>> class A:
-        ...     @cached_property(my_flag=True)
-        ...     def f(self):
-        ...         return None
-
-        >>> class B(A):
-        ...     @cached_property(my_flag=False)
-        ...     def f(self):
-        ...         return None
-
-        >>> a = A()
-        >>> b = B()
-
-        >>> vbt.CacheCondition(instance=a, func='f')  # A.f
-        >>> vbt.CacheCondition(instance=b, func='f')  # B.f
-        >>> vbt.CacheCondition(instance=a, flags=dict(my_flag=True))  # A.f
-        >>> vbt.CacheCondition(instance=a, flags=dict(my_flag=False))  # none
-        >>> vbt.CacheCondition(instance=b, flags=dict(my_flag=False))  # B.f
-        >>> vbt.CacheCondition(instance=a)  # A.f
-        >>> vbt.CacheCondition(instance=b)  # B.f
-        >>> vbt.CacheCondition(cls=A)  # A.f
-        >>> vbt.CacheCondition(cls=B)  # B.f
-        >>> vbt.CacheCondition(base_cls=A)  # A.f and B.f
-        >>> vbt.CacheCondition(base_cls=B)  # B.f
-        >>> vbt.CacheCondition(base_cls=A, flags=dict(my_flag=False))  # B.f
-        >>> vbt.CacheCondition(func=A.f)  # A.f
-        >>> vbt.CacheCondition(func=B.f)  # B.f
-        >>> vbt.CacheCondition(func='f')  # A.f and B.f
-        >>> vbt.CacheCondition(func='f', flags=dict(my_flag=False))  # B.f
-        >>> vbt.CacheCondition(flags=dict(my_flag=True))  # A.f
-        ```
     """
+    根据配置的缓存条件判断是否应该对指定的方法/属性进行缓存。
+    
+    通过评估一系列预定义的缓存条件来决定
+    是否启用缓存。条件按照优先级排序，越具体的条件优先级越高。
+    如果同时匹配到白名单和黑名单条件且优先级相同，则由全局缓存开关 `enabled` 决定。
+    
+    缓存条件优先级排序（数字越小优先级越高）：
+        0) instance + func：针对特定实例的特定方法/属性
+        1) instance + flags：针对特定实例的带特定标志的方法/属性
+        2) instance：针对特定实例的所有方法/属性
+        3) cls + func：针对特定类的特定方法/属性
+        4) cls + flags：针对特定类的带特定标志的方法/属性
+        5) cls：针对特定类的所有方法/属性
+        6) base_cls + func：针对基类的特定方法/属性
+        7) base_cls + flags：针对基类的带特定标志的方法/属性
+        8) base_cls：针对基类的所有方法/属性
+        9) func + flags：针对带特定标志的特定方法/属性
+        10) func：针对特定方法/属性
+        11) flags：针对带特定标志的所有方法/属性
+    
+    Args:
+        func_name (str): 方法或属性的名称，用于条件匹配。
+            例如：'calculate', 'process_data', 'expensive_property'
+            
+        instance (object): 调用方法/属性的实例对象，用于类型检查和实例匹配。
+            例如：MyClass() 的实例对象
+            
+        func (tp.Optional[tp.Callable], optional): 方法/属性的可调用对象，用于精确匹配。
+            可以是普通方法、cached_property 实例等。默认为 None。
+            例如：MyClass.my_method, cached_property 描述符对象
+            
+        **flags: 方法/属性的标志参数，用于标志匹配。
+            例如：expensive=True, priority='high', cache_size=128
+    
+    Returns:
+        bool: True 表示应该缓存，False 表示不应该缓存。
+    
+    Examples:
+        ```python
+        import vectorbt as vbt
+        
+        class DataProcessor:
+            @vbt.cached_property(expensive=True, priority='high')
+            def heavy_calculation(self):
+                return sum(range(1000000))
+            
+            @vbt.cached_method(maxsize=64, priority='low')
+            def process_data(self, data):
+                return [x * 2 for x in data]
+        
+        processor = DataProcessor()
+        
+        # 检查是否应该缓存 heavy_calculation 属性
+        should_cache_result = should_cache(
+            func_name='heavy_calculation',
+            instance=processor,
+            func=DataProcessor.heavy_calculation,
+            expensive=True,
+            priority='high'
+        )
+        
+        # 检查是否应该缓存 process_data 方法
+        should_cache_result2 = should_cache(
+            func_name='process_data',
+            instance=processor,
+            func=DataProcessor.process_data,
+            maxsize=64,
+            priority='low'
+        )
+        ```
+    
+    Note:
+        该函数依赖于 `vectorbt._settings.settings['caching']` 中的配置，
+        包括 `whitelist`、`blacklist` 和 `enabled` 设置。
+    """
+    # 从 vectorbt 设置中获取缓存配置
     from vectorbt._settings import settings
     caching_cfg = settings['caching']
 
+    # 设置起始排序值，用于表示未匹配任何条件的情况
+    # 数值越大表示优先级越低，100 表示最低优先级
     start_rank = 100
 
     def _get_condition_rank(cond: CacheCondition) -> int:
-        # Perform initial checks
+        """
+        计算给定缓存条件的优先级排序值。
+        
+        该内部函数评估单个 CacheCondition 对象，检查其是否与当前的方法调用匹配，
+        并返回相应的优先级排序值。排序值越小表示优先级越高。
+        
+        Args:
+            cond (CacheCondition): 要评估的缓存条件对象
+            
+        Returns:
+            int: 条件的优先级排序值，如果条件不匹配则返回 start_rank (100)
+        """
+        # 验证条件对象的类型，确保是 CacheCondition 实例
         checks.assert_instance_of(cond, CacheCondition)
 
+        # 检查实例条件：如果指定了实例，必须与当前实例完全匹配
         if cond.instance is not None:
             if instance is not cond.instance:
+                # 实例不匹配，返回最低优先级
                 return start_rank
+                
+        # 检查函数/方法条件：支持多种类型的函数匹配
         if cond.func is not None:
-            if isinstance(cond.func, cached_property):  # cached_property
+            if isinstance(cond.func, cached_property):  
+                # 如果条件中的 func 是 cached_property 实例
+                # 比较其内部的实际函数对象
                 if func != cond.func.func:
                     return start_rank
-            elif callable(cond.func) and hasattr(func, 'func') and hasattr(cond.func, 'func'):  # cached_method
+            elif callable(cond.func) and hasattr(func, 'func') and hasattr(cond.func, 'func'):  
+                # 如果两者都是包装过的方法（如 cached_method）
+                # 比较其内部的原始函数对象
                 if func.func != cond.func.func:
                     return start_rank
             elif isinstance(cond.func, str):
+                # 如果条件中的 func 是字符串，进行名称匹配
                 if func_name != cond.func:
                     return start_rank
             else:
+                # 不支持的函数类型，抛出类型错误
                 raise TypeError(f"Caching condition {cond}: func must be either a callable or a string")
+                
+        # 检查类条件：必须是当前实例的确切类型
         if cond.cls is not None:
             if inspect.isclass(cond.cls):
+                # 如果条件中的 cls 是类对象，进行精确类型匹配
                 if type(instance) != cond.cls:
                     return start_rank
             elif isinstance(cond.cls, str):
+                # 如果条件中的 cls 是字符串，进行类名匹配
                 if type(instance).__name__ != cond.cls:
                     return start_rank
             else:
+                # 不支持的类类型，抛出类型错误
                 raise TypeError(f"Caching condition {cond}: cls must be either a class or a string")
+                
+        # 检查基类条件：检查实例是否为指定基类的子类
         if cond.base_cls is not None:
             if inspect.isclass(cond.base_cls) or isinstance(cond.base_cls, str):
+                # 使用 checks.is_instance_of 进行继承关系检查
                 if not checks.is_instance_of(instance, cond.base_cls):
                     return start_rank
             else:
+                # 不支持的基类类型，抛出类型错误
                 raise TypeError(f"Caching condition {cond}: base_cls must be either a class or a string")
+                
+        # 检查标志条件：所有指定的标志都必须匹配
         if cond.flags is not None:
             if not isinstance(cond.flags, dict):
+                # 标志必须是字典类型
                 raise TypeError(f"Caching condition {cond}: flags must be a dict")
+            # 逐一检查每个标志键值对
             for k, v in cond.flags.items():
                 if k not in flags or flags[k] != v:
+                    # 如果任何标志不匹配，返回最低优先级
                     return start_rank
+                    
+        # 如果条件指定了自定义排序值，使用自定义值覆盖默认排序
         if cond.rank is not None:
             if not isinstance(cond.rank, int):
+                # 排序值必须是整数
                 raise TypeError(f"Caching condition {cond}: rank must be an integer")
+            # 创建一个包含12个相同自定义排序值的列表
+            # 这样无论匹配到哪种条件组合，都使用相同的自定义优先级
             ranks = [cond.rank for _ in range(12)]
         else:
+            # 使用默认的优先级排序：0-11，数字越小优先级越高
             ranks = list(range(12))
 
-        # Rank instance conditions
+        # 根据匹配的条件组合返回相应的优先级排序值
+        # 实例级条件（最高优先级）
         if cond.instance is not None and cond.func is not None:
+            # 实例 + 函数：最具体的条件
             return ranks[0]
         if cond.instance is not None and cond.flags is not None:
+            # 实例 + 标志：针对特定实例的带标志方法
             return ranks[1]
         if cond.instance is not None:
+            # 仅实例：针对特定实例的所有方法
             return ranks[2]
 
-        # Rank class conditions
+        # 类级条件（中等优先级）
         if cond.cls is not None and cond.func is not None:
+            # 类 + 函数：针对特定类的特定方法
             return ranks[3]
         if cond.cls is not None and cond.flags is not None:
+            # 类 + 标志：针对特定类的带标志方法
             return ranks[4]
         if cond.cls is not None:
+            # 仅类：针对特定类的所有方法
             return ranks[5]
 
-        # Rank base class conditions
+        # 基类级条件（较低优先级）
         if cond.base_cls is not None and cond.func is not None:
+            # 基类 + 函数：针对基类的特定方法
             return ranks[6]
         if cond.base_cls is not None and cond.flags is not None:
+            # 基类 + 标志：针对基类的带标志方法
             return ranks[7]
         if cond.base_cls is not None:
+            # 仅基类：针对基类的所有方法
             return ranks[8]
 
-        # Rank function conditions
+        # 函数级条件（最低优先级）
         if cond.func is not None and cond.flags is not None:
+            # 函数 + 标志：针对带标志的特定方法
             return ranks[9]
         if cond.func is not None:
+            # 仅函数：针对特定方法
             return ranks[10]
         if cond.flags is not None:
+            # 仅标志：针对带特定标志的所有方法
             return ranks[11]
 
+        # 如果没有匹配任何条件组合，返回最低优先级
         return start_rank
 
+    # 评估白名单条件，找到最高优先级（最小排序值）的匹配条件
     white_rank = start_rank
     if len(caching_cfg['whitelist']) > 0:
+        # 遍历所有白名单条件，找到优先级最高的匹配条件
         for cond in caching_cfg['whitelist']:
             white_rank = min(white_rank, _get_condition_rank(cond))
 
+    # 评估黑名单条件，找到最高优先级（最小排序值）的匹配条件
     black_rank = start_rank
     if len(caching_cfg['blacklist']) > 0:
+        # 遍历所有黑名单条件，找到优先级最高的匹配条件
         for cond in caching_cfg['blacklist']:
             black_rank = min(black_rank, _get_condition_rank(cond))
 
-    if white_rank == black_rank:  # none of the conditions met
-        return caching_cfg['enabled']  # global caching decides
+    # 根据白名单和黑名单的匹配结果决定是否缓存
+    if white_rank == black_rank:  
+        # 如果白名单和黑名单的优先级相同（包括都未匹配的情况）
+        # 使用全局缓存开关决定
+        return caching_cfg['enabled']  
+    # 如果优先级不同，白名单优先级更高则启用缓存，否则禁用缓存
     return white_rank < black_rank
 
 
@@ -309,21 +399,19 @@ _NOT_FOUND = object()
 
 
 class cached_property(custom_property):
-    """Extends `custom_property` with caching.
-
-    Similar to `functools.cached_property`, but without replacing the original attribute
-    to be able to re-compute whenever needed.
-
-    Disables caching if `should_cache` yields False.
-
-    Cache can be cleared by calling `clear_cache` with instance as argument.
-
-    !!! note:
-        Assumes that the instance (provided as `self`) won't change. If calculation depends
-        upon object attributes that can be changed, it won't notice the change."""
 
     def __init__(self, func: tp.Callable, **flags) -> None:
+        """
+        初始化 cached_property 实例。
+        
+        Args:
+            func (tp.Callable): 要缓存的属性方法
+            **flags: 额外的标志参数，用于缓存条件匹配
+        """
         super().__init__(func, **flags)
+        # 使用 RLock（可重入锁）而不是普通 Lock
+        # RLock 允许同一线程多次获取锁，避免死锁问题
+        # 这在递归调用或嵌套访问同一属性时特别重要
         self.lock = RLock()
 
     def clear_cache(self, instance: object) -> None:

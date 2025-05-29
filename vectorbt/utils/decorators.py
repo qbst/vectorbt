@@ -171,76 +171,18 @@ def should_cache(func_name: str, instance: object, func: tp.Optional[tp.Callable
         9) func + flags：针对带特定标志的特定方法/属性
         10) func：针对特定方法/属性
         11) flags：针对带特定标志的所有方法/属性
-    
-    Args:
-        func_name (str): 方法或属性的名称，用于条件匹配。
-            例如：'calculate', 'process_data', 'expensive_property'
-            
-        instance (object): 调用方法/属性的实例对象，用于类型检查和实例匹配。
-            例如：MyClass() 的实例对象
-            
-        func (tp.Optional[tp.Callable], optional): 方法/属性的可调用对象，用于精确匹配。
-            可以是普通方法、cached_property 实例等。默认为 None。
-            例如：MyClass.my_method, cached_property 描述符对象
-            
-        **flags: 方法/属性的标志参数，用于标志匹配。
-            例如：expensive=True, priority='high', cache_size=128
-    
-    Returns:
-        bool: True 表示应该缓存，False 表示不应该缓存。
-    
-    Examples:
-        ```python
-        import vectorbt as vbt
-        
-        class DataProcessor:
-            @vbt.cached_property(expensive=True, priority='high')
-            def heavy_calculation(self):
-                return sum(range(1000000))
-            
-            @vbt.cached_method(maxsize=64, priority='low')
-            def process_data(self, data):
-                return [x * 2 for x in data]
-        
-        processor = DataProcessor()
-        
-        # 检查是否应该缓存 heavy_calculation 属性
-        should_cache_result = should_cache(
-            func_name='heavy_calculation',
-            instance=processor,
-            func=DataProcessor.heavy_calculation,
-            expensive=True,
-            priority='high'
-        )
-        
-        # 检查是否应该缓存 process_data 方法
-        should_cache_result2 = should_cache(
-            func_name='process_data',
-            instance=processor,
-            func=DataProcessor.process_data,
-            maxsize=64,
-            priority='low'
-        )
-        ```
-    
-    Note:
-        该函数依赖于 `vectorbt._settings.settings['caching']` 中的配置，
-        包括 `whitelist`、`blacklist` 和 `enabled` 设置。
     """
-    # 从 vectorbt 设置中获取缓存配置
+    
     from vectorbt._settings import settings
     caching_cfg = settings['caching']
 
-    # 设置起始排序值，用于表示未匹配任何条件的情况
-    # 数值越大表示优先级越低，100 表示最低优先级
+    # 起始排序值，用于表示未匹配任何条件的情况
     start_rank = 100
 
     def _get_condition_rank(cond: CacheCondition) -> int:
         """
-        计算给定缓存条件的优先级排序值。
-        
-        该内部函数评估单个 CacheCondition 对象，检查其是否与当前的方法调用匹配，
-        并返回相应的优先级排序值。排序值越小表示优先级越高。
+        使用缓存条件 cond 考察当前的方法调用should_cache的参数：func_name, instance, func, **flags
+        并返回相应的优先级排序值，排序值越小表示优先级越高。
         
         Args:
             cond (CacheCondition): 要评估的缓存条件对象
@@ -248,74 +190,59 @@ def should_cache(func_name: str, instance: object, func: tp.Optional[tp.Callable
         Returns:
             int: 条件的优先级排序值，如果条件不匹配则返回 start_rank (100)
         """
-        # 验证条件对象的类型，确保是 CacheCondition 实例
+
         checks.assert_instance_of(cond, CacheCondition)
 
         # 检查实例条件：如果指定了实例，必须与当前实例完全匹配
         if cond.instance is not None:
             if instance is not cond.instance:
-                # 实例不匹配，返回最低优先级
                 return start_rank
-                
+          
         # 检查函数/方法条件：支持多种类型的函数匹配
         if cond.func is not None:
+            # 如果 cond.func 是 cached_property 实例
             if isinstance(cond.func, cached_property):  
-                # 如果条件中的 func 是 cached_property 实例
-                # 比较其内部的实际函数对象
                 if func != cond.func.func:
                     return start_rank
             elif callable(cond.func) and hasattr(func, 'func') and hasattr(cond.func, 'func'):  
-                # 如果两者都是包装过的方法（如 cached_method）
-                # 比较其内部的原始函数对象
                 if func.func != cond.func.func:
                     return start_rank
             elif isinstance(cond.func, str):
-                # 如果条件中的 func 是字符串，进行名称匹配
                 if func_name != cond.func:
                     return start_rank
             else:
-                # 不支持的函数类型，抛出类型错误
                 raise TypeError(f"Caching condition {cond}: func must be either a callable or a string")
                 
         # 检查类条件：必须是当前实例的确切类型
         if cond.cls is not None:
             if inspect.isclass(cond.cls):
-                # 如果条件中的 cls 是类对象，进行精确类型匹配
                 if type(instance) != cond.cls:
                     return start_rank
             elif isinstance(cond.cls, str):
-                # 如果条件中的 cls 是字符串，进行类名匹配
                 if type(instance).__name__ != cond.cls:
                     return start_rank
             else:
-                # 不支持的类类型，抛出类型错误
                 raise TypeError(f"Caching condition {cond}: cls must be either a class or a string")
                 
         # 检查基类条件：检查实例是否为指定基类的子类
         if cond.base_cls is not None:
             if inspect.isclass(cond.base_cls) or isinstance(cond.base_cls, str):
-                # 使用 checks.is_instance_of 进行继承关系检查
                 if not checks.is_instance_of(instance, cond.base_cls):
                     return start_rank
             else:
-                # 不支持的基类类型，抛出类型错误
                 raise TypeError(f"Caching condition {cond}: base_cls must be either a class or a string")
                 
         # 检查标志条件：所有指定的标志都必须匹配
         if cond.flags is not None:
             if not isinstance(cond.flags, dict):
-                # 标志必须是字典类型
                 raise TypeError(f"Caching condition {cond}: flags must be a dict")
-            # 逐一检查每个标志键值对
             for k, v in cond.flags.items():
                 if k not in flags or flags[k] != v:
-                    # 如果任何标志不匹配，返回最低优先级
                     return start_rank
                     
         # 如果条件指定了自定义排序值，使用自定义值覆盖默认排序
         if cond.rank is not None:
             if not isinstance(cond.rank, int):
-                # 排序值必须是整数
                 raise TypeError(f"Caching condition {cond}: rank must be an integer")
             # 创建一个包含12个相同自定义排序值的列表
             # 这样无论匹配到哪种条件组合，都使用相同的自定义优先级
@@ -325,51 +252,31 @@ def should_cache(func_name: str, instance: object, func: tp.Optional[tp.Callable
             ranks = list(range(12))
 
         # 根据匹配的条件组合返回相应的优先级排序值
-        # 实例级条件（最高优先级）
         if cond.instance is not None and cond.func is not None:
-            # 实例 + 函数：最具体的条件
             return ranks[0]
         if cond.instance is not None and cond.flags is not None:
-            # 实例 + 标志：针对特定实例的带标志方法
             return ranks[1]
         if cond.instance is not None:
-            # 仅实例：针对特定实例的所有方法
             return ranks[2]
-
-        # 类级条件（中等优先级）
         if cond.cls is not None and cond.func is not None:
-            # 类 + 函数：针对特定类的特定方法
             return ranks[3]
         if cond.cls is not None and cond.flags is not None:
-            # 类 + 标志：针对特定类的带标志方法
             return ranks[4]
         if cond.cls is not None:
-            # 仅类：针对特定类的所有方法
             return ranks[5]
-
-        # 基类级条件（较低优先级）
         if cond.base_cls is not None and cond.func is not None:
-            # 基类 + 函数：针对基类的特定方法
             return ranks[6]
         if cond.base_cls is not None and cond.flags is not None:
-            # 基类 + 标志：针对基类的带标志方法
             return ranks[7]
         if cond.base_cls is not None:
-            # 仅基类：针对基类的所有方法
             return ranks[8]
-
-        # 函数级条件（最低优先级）
         if cond.func is not None and cond.flags is not None:
-            # 函数 + 标志：针对带标志的特定方法
             return ranks[9]
         if cond.func is not None:
-            # 仅函数：针对特定方法
             return ranks[10]
         if cond.flags is not None:
-            # 仅标志：针对带特定标志的所有方法
             return ranks[11]
 
-        # 如果没有匹配任何条件组合，返回最低优先级
         return start_rank
 
     # 评估白名单条件，找到最高优先级（最小排序值）的匹配条件
@@ -425,6 +332,22 @@ class cached_property(custom_property):
         return '__cached_' + self.name
 
     def __set_name__(self, owner: tp.Type, name: str) -> None:
+        """
+        设置描述符在所属类中的属性名
+        
+        Args:
+            owner (tp.Type): 所属的类
+            name (str): 属性名称
+        例子：
+            class MyDescriptor:
+                def __set_name__(self, owner, name):...  
+                def __get__(self, instance, owner):...
+
+            class MyClass:
+                # 该行代码执行时，Python 自动调用 my_attr.__set_name__(MyClass, 'my_attr')
+                my_attr = MyDescriptor()
+        """
+        
         self.name = name
 
     def __get__(self, instance: object, owner: tp.Optional[tp.Type] = None) -> tp.Any:

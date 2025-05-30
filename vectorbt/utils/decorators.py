@@ -78,6 +78,7 @@ custom_propertyT = tp.TypeVar("custom_propertyT", bound="custom_property")
 
 class custom_property:
     """
+    实例属性装饰器
     两种装饰方式：
         @custom_property(a=0, b=0)  # flags
         def property(): ...
@@ -152,11 +153,9 @@ class CacheCondition(tp.NamedTuple):
 
 def should_cache(func_name: str, instance: object, func: tp.Optional[tp.Callable] = None, **flags) -> bool:
     """
-    根据配置的缓存条件判断是否应该对指定的方法/属性进行缓存。
-    
-    通过评估一系列预定义的缓存条件来决定
-    是否启用缓存。条件按照优先级排序，越具体的条件优先级越高。
-    如果同时匹配到白名单和黑名单条件且优先级相同，则由全局缓存开关 `enabled` 决定。
+    使用配置的缓存条件 settings['caching'] 中的白名单['whitelist']和黑名单['blacklist']，
+    考察当前的方法调用func_name, instance, func, **flags，分别获得在白名单和黑名单中的最高优先级（最小排序值）数值，
+    如果白名单优先级更高则启用缓存，否则禁用缓存。
     
     缓存条件优先级排序（数字越小优先级越高）：
         0) instance + func：针对特定实例的特定方法/属性
@@ -279,26 +278,20 @@ def should_cache(func_name: str, instance: object, func: tp.Optional[tp.Callable
 
         return start_rank
 
-    # 评估白名单条件，找到最高优先级（最小排序值）的匹配条件
+    # 评估白名单条件，计算最高优先级（最小排序值）数值
     white_rank = start_rank
     if len(caching_cfg['whitelist']) > 0:
-        # 遍历所有白名单条件，找到优先级最高的匹配条件
         for cond in caching_cfg['whitelist']:
             white_rank = min(white_rank, _get_condition_rank(cond))
 
-    # 评估黑名单条件，找到最高优先级（最小排序值）的匹配条件
+    # 评估黑名单条件，计算最高优先级（最小排序值）数值
     black_rank = start_rank
     if len(caching_cfg['blacklist']) > 0:
-        # 遍历所有黑名单条件，找到优先级最高的匹配条件
         for cond in caching_cfg['blacklist']:
             black_rank = min(black_rank, _get_condition_rank(cond))
 
-    # 根据白名单和黑名单的匹配结果决定是否缓存
     if white_rank == black_rank:  
-        # 如果白名单和黑名单的优先级相同（包括都未匹配的情况）
-        # 使用全局缓存开关决定
         return caching_cfg['enabled']  
-    # 如果优先级不同，白名单优先级更高则启用缓存，否则禁用缓存
     return white_rank < black_rank
 
 
@@ -306,6 +299,9 @@ _NOT_FOUND = object()
 
 
 class cached_property(custom_property):
+    """
+    继承 custom_property（实例属性装饰器），在此基础上增加了将实例属性调用结果存储到实例字典的功能
+    """
 
     def __init__(self, func: tp.Callable, **flags) -> None:
         """
@@ -351,15 +347,29 @@ class cached_property(custom_property):
         self.name = name
 
     def __get__(self, instance: object, owner: tp.Optional[tp.Type] = None) -> tp.Any:
+        """
+        调用 self.func(instance)。如果启用了缓存，还会将('__cached_' + self.name: self.func(instance)) 写入instance.__dict__
+        """
         if instance is None:
             return self
+        
+        # 使用配置的缓存条件 settings['caching'] 中的白名单['whitelist']和黑名单['blacklist']，
+        # 考察当前的方法调用self.name, instance, self.func, self.flags，分别获得在白名单和黑名单中的最高优先级（最小排序值）数值，
+        # 如果白名单优先级更高则启用缓存，否则禁用缓存。
         if not should_cache(self.name, instance, func=self.func, **self.flags):
+            # 禁用缓存时，直接调用 self.func(instance)
             return super().__get__(instance, owner=owner)
         cache = instance.__dict__
+        # 从instance.__dict__中查找self.attrname（'__cached_' + self.name）
+        # 使用 _NOT_FOUND 作为默认值（唯一的哨兵对象），以区分 None 值和未找到的情况
         val = cache.get(self.attrname, _NOT_FOUND)
         if val is _NOT_FOUND:
+            # 将 ('__cached_' + self.name: self.func(instance)) 写入instance.__dict__
+            # 获取锁，确保线程安全。使用 with 语句确保锁会被正确释放，即使发生异常
             with self.lock:
-                # check if another thread filled cache while we awaited lock
+                # 双重检查：在获得锁后再次检查缓存
+                # 这是为了防止在等待锁的过程中，其他线程已经完成了计算并更新了缓存
+                # 这种模式称为"双重检查锁定"（Double-Checked Locking）
                 val = cache.get(self.attrname, _NOT_FOUND)
                 if val is _NOT_FOUND:
                     val = self.func(instance)
@@ -379,33 +389,48 @@ class custom_methodT(tp.Protocol):
 
 
 def custom_method(*args, **flags) -> tp.Union[tp.Callable, custom_methodT]:
-    """Custom extensible method that stores function and flags as attributes.
+    """
+    装饰器
+    可以像这样调用：
+    ```pycon
+    >>> @custom_method
+    ... def func(): pass
+    # 获得的是 wrapper（相较于被装饰的函数添加了 func 和 flags 属性）
+    ```
+    也可以像这样调用：
+    ```pycon
+    >>> @custom_method(flag1=value1, flag2=value2)  # flags
+    ... def func(): pass
+    # 获得的是 decorator:tp.Callable——>custom_methodT
+    ```
+    作用是：为被包装函数提供 flags 属性
 
-    Can be called both as
-    ```pycon
-    >>> @cached_method
-    ... def user_function(): pass
-    ```
-    and
-    ```pycon
-    >>> @cached_method(maxsize=128, typed=False, a=0, b=0)  # flags
-    ... def user_function(): pass
-    ```
+    Returns:
+        tp.Union[tp.Callable, custom_methodT]: _description_
     """
 
     def decorator(func: tp.Callable) -> custom_methodT:
+        # 使用 functools.wraps 装饰器保持原函数的元数据
+        # 这确保了 wrapper.__name__, wrapper.__doc__, wrapper.__module__ 等属性与原函数 func 保持一致
         @wraps(func)
         def wrapper(*args, **kwargs) -> tp.Any:
             return func(*args, **kwargs)
 
+        # 为包装函数添加 func 属性，存储对原函数的引用，从而允许在需要时访问未装饰的原始函数
+        # 例如：decorated_func.func(*args, **kwargs) 可以直接调用原函数
         wrapper.func = func
         wrapper.flags = flags
 
         return wrapper
 
     if len(args) == 0:
+        # 带参数装饰
+        # @custom_method(flags) -> custom_method(**flags) -> decorator
+        #   -> Python 调用 decorator(target_function) -> 装饰后的函数
         return decorator
     elif len(args) == 1:
+        # 直接装饰
+        # @custom_method -> custom_method(target_function) -> 装饰后的函数
         return decorator(args[0])
     raise ValueError("Either function or keyword arguments must be passed")
 
@@ -424,38 +449,65 @@ class cached_methodT(custom_methodT):
 
 def cached_method(*args, maxsize: int = 128, typed: bool = False,
                   **flags) -> tp.Union[tp.Callable, cached_methodT]:
-    """Extends `custom_method` with caching.
-
-    Internally uses `functools.lru_cache`.
-
-    Disables caching if `should_cache` yields False or a non-hashable object
-    as argument has been passed.
-
-    See notes on `cached_property`."""
+    """
+    装饰器
+    ① 无参调用：
+        ```pycon
+        >>> @cached_method
+        ... def func(): pass
+        ```
+        获得的是 wrapper：
+            返回 func，其增加了 func, flags, maxsize, typed, name, attrname, lock, clear_cache 属性
+            如果 instance.__dict__ 中没有 wrapper.attrname 方法，
+                创建一个 lru_cache 装饰的func，并将其存储到 instance.__dict__ 中
+                如果 args 和 kwargs 可哈希，返回该 lru_cache 装饰后的func
+    ② 含参调用：
+        ```pycon
+        >>> @cached_method(flag1=value1, flag2=value2)  # flags
+        ... def func(): pass
+        ```
+        获得的是 decorator:tp.Callable——>cached_methodT
+    """
 
     def decorator(func: tp.Callable) -> cached_methodT:
+        """
+        返回 func，其增加了 func, flags, maxsize, typed, name, attrname, lock, clear_cache 属性
+        如果 instance.__dict__ 中没有 wrapper.attrname 方法，
+            创建一个 lru_cache 装饰的func，并将其存储到 instance.__dict__ 中
+            如果 args 和 kwargs 可哈希，返回该 lru_cache 装饰后的func
+        """
+        
+        # 使用 functools.wraps 保持原方法的元数据，确保 __name__, __doc__, __module__ 等属性正确传递
         @wraps(func)
         def wrapper(instance: object, *args, **kwargs) -> tp.Any:
             def partial_func(*args, **kwargs) -> tp.Any:
-                # Ignores non-hashable instances
                 return func(instance, *args, **kwargs)
 
+            # 如果实例已经有了这个方法的引用，获取它，可能是之前装饰过的版本或其他相关方法
             _func = None
             if hasattr(instance, wrapper.name):
                 _func = getattr(instance, wrapper.name)
+            # 使用配置的缓存条件 settings['caching'] 中的白名单['whitelist']和黑名单['blacklist']，
+            # 考察当前的方法调用wrapper.name, instance, _func, wrapper.flags，分别获得在白名单和黑名单中的最高优先级（最小排序值）数值，
+            # 如果白名单优先级更高则启用缓存，否则禁用缓存。
             if not should_cache(wrapper.name, instance, func=_func, **wrapper.flags):
                 return func(instance, *args, **kwargs)
+            # 从instance.__dict__中查找wrapper.attrname
             cache = instance.__dict__
             cached_func = cache.get(wrapper.attrname, _NOT_FOUND)
             if cached_func is _NOT_FOUND:
+                # 将 (wrapper.name: wrapper.func(instance)) 写入instance.__dict__
                 with wrapper.lock:
-                    # check if another thread filled cache while we awaited lock
                     cached_func = cache.get(wrapper.attrname, _NOT_FOUND)
+                    # 如果仍然没有缓存函数，创建新的
                     if cached_func is _NOT_FOUND:
+                        # 创建新的 lru_cache 装饰的函数
                         cached_func = lru_cache(maxsize=wrapper.maxsize, typed=wrapper.typed)(partial_func)
+                        # 将缓存函数存储到实例字典中
+                        # 注意：这里存储的是函数对象，不是函数的输出结果
                         cache[wrapper.attrname] = cached_func  # store function instead of output
 
-            # Check if object can be hashed
+            # 检查arg和kwargs所有参数是否可哈希，lru_cache 要求所有参数都必须可哈希才能正常工作
             hashable = True
             for arg in args:
                 if not checks.is_hashable(arg):
@@ -465,24 +517,27 @@ def cached_method(*args, maxsize: int = 128, typed: bool = False,
                 if not checks.is_hashable(v):
                     hashable = False
                     break
+            # 如果参数不可哈希，则不使用缓存
             if not hashable:
-                # If not, do not invoke lru_cache
                 return func(instance, *args, **kwargs)
+            # 使用缓存函数
             return cached_func(*args, **kwargs)
 
         def clear_cache(instance):
-            """Clear the cache for this method belonging to `instance`."""
+            """
+            清除指定实例instance的wrapper.attrname方法缓存。
+            """
             if hasattr(instance, wrapper.attrname):
                 delattr(instance, wrapper.attrname)
 
-        wrapper.func = func
-        wrapper.flags = flags
-        wrapper.maxsize = maxsize
-        wrapper.typed = typed
-        wrapper.name = func.__name__
-        wrapper.attrname = '__cached_' + func.__name__
-        wrapper.lock = RLock()
-        wrapper.clear_cache = clear_cache
+        wrapper.func = func                             # 存储对原函数的引用
+        wrapper.flags = flags                           # 存储装饰器的配置参数
+        wrapper.maxsize = maxsize                       # 设置缓存的最大大小
+        wrapper.typed = typed                           # 设置是否启用类型敏感缓存
+        wrapper.name = func.__name__                    # 存储原函数的名称
+        wrapper.attrname = '__cached_' + func.__name__  # 生成缓存属性的名称
+        wrapper.lock = RLock()                          # 创建一个可重入锁，用于线程安全的缓存更新
+        wrapper.clear_cache = clear_cache               # 存储清除缓存的方法
 
         return wrapper
 
@@ -497,8 +552,10 @@ def cached_method(*args, maxsize: int = 128, typed: bool = False,
 
 WrapperFuncT = tp.Callable[[tp.Type[tp.T]], tp.Type[tp.T]]
 
+# __pdoc__ 是 pdoc 文档生成工具使用的特殊变量，用于控制哪些对象应该包含在生成的文档中，空字典表示使用默认的文档生成行为
 __pdoc__ = {}
 
+# 二元魔术方法配置对象，用于批量为类添加运算符重载功能
 binary_magic_config = Config(
     {
         '__eq__': dict(func=np.equal),
@@ -533,8 +590,10 @@ binary_magic_config = Config(
     readonly=True,
     as_attrs=False
 )
-"""_"""
+"""_""" # 空文档字符串，用于 pdoc 文档生成
 
+# 为 binary_magic_config 添加文档字符串
+# 使用 f-string 格式化，将配置内容以 JSON 格式展示在文档中
 __pdoc__['binary_magic_config'] = f"""Config of binary magic methods to be added to a class.
 
 ```json
@@ -547,18 +606,71 @@ BinaryTranslateFuncT = tp.Callable[[tp.Any, tp.Any, tp.Callable], tp.Any]
 
 def attach_binary_magic_methods(translate_func: BinaryTranslateFuncT,
                                 config: tp.Optional[Config] = None) -> WrapperFuncT:
-    """Class decorator to add binary magic methods to a class.
-
-    `translate_func` should
-
-    * take `self`, `other`, and unary function,
-    * perform computation, and
-    * return the result.
-
-    `config` defaults to `binary_magic_config` and should contain target method names (keys)
-    and dictionaries (values) with the following keys:
-
-    * `func`: Function that combines two array-like objects.
+    """
+    类装饰器，用于为类批量添加二元魔术方法。
+    
+    该装饰器实现了运算符重载的自动化，通过配置文件定义的映射关系，
+    为类添加各种二元运算符的支持。这种设计模式在数值计算库中非常常见，
+    可以让自定义类像内置数值类型一样支持各种运算操作。
+    
+    工作原理：
+    1. 读取配置中定义的魔术方法名和对应的 NumPy 函数
+    2. 为每个魔术方法创建一个新的方法实现
+    3. 新方法调用用户提供的 translate_func 来处理实际运算
+    4. 将新方法动态添加到目标类中
+    
+    使用示例：
+        # 定义转换函数
+        def my_translate_func(self, other, numpy_func):
+            # 将 self 和 other 转换为 NumPy 数组
+            arr1 = np.asarray(self.data)
+            arr2 = np.asarray(other.data if hasattr(other, 'data') else other)
+            # 使用 NumPy 函数进行运算
+            result = numpy_func(arr1, arr2)
+            # 返回包装后的结果
+            return MyClass(result)
+        
+        # 应用装饰器
+        @attach_binary_magic_methods(my_translate_func)
+        class MyClass:
+            def __init__(self, data):
+                self.data = data
+        
+        # 现在可以使用运算符
+        obj1 = MyClass([1, 2, 3])
+        obj2 = MyClass([4, 5, 6])
+        result = obj1 + obj2  # 自动调用 __add__ 方法
+        
+        # 也支持与标量运算
+        result2 = obj1 * 2    # 自动调用 __mul__ 方法
+    
+    Args:
+        translate_func (BinaryTranslateFuncT): 转换函数，负责处理实际的二元运算逻辑
+            - 第一个参数 self: 运算的左操作数（当前对象实例）
+            - 第二个参数 other: 运算的右操作数（可以是任何类型）
+            - 第三个参数 func: 要执行的 NumPy 运算函数（如 np.add, np.multiply 等）
+            - 返回值: 运算结果，通常是与 self 相同类型的新对象
+            
+        config (tp.Optional[Config], optional): 魔术方法配置对象。默认为 None。
+            - 如果为 None，则使用 binary_magic_config 作为默认配置
+            - 配置对象应包含魔术方法名作为键，包含 'func' 键的字典作为值
+            - 'func' 键对应的值应该是可调用的 NumPy 函数
+    
+    Returns:
+        WrapperFuncT: 类装饰器函数
+            - 接受一个类作为参数
+            - 返回添加了魔术方法的同一个类
+            - 不改变类的继承关系或其他属性
+    
+    注意事项：
+        1. translate_func 必须能够处理不同类型的 other 参数
+        2. 返回的对象类型应该与原对象兼容
+        3. 魔术方法的添加是动态的，在类定义时完成
+        4. 如果类已经定义了同名的魔术方法，会被覆盖
+    
+    异常处理：
+        - 如果 config 中的 'func' 不是可调用对象，可能在运行时抛出 TypeError
+        - 如果 translate_func 无法处理某些参数组合，应该在其内部处理异常
     """
     if config is None:
         config = binary_magic_config

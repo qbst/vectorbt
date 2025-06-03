@@ -19,10 +19,11 @@ class class_or_instancemethod(classmethod):
     @class_or_instancemethod
     def method():...    # method = class_or_instancemethod(method)
     
-    obj.method(***)     # 等价于 method.__get__(obj, type(obj)).__call__(***)
-    Class.method(***)   # 等价于 method.__get__(cls, type(cls)).__call__(***)
+    obj.method(***)     # 等价于 method.__get__(obj, type(obj)).__call__(***)   绑定到实例后调用
+    Class.method(***)   # 等价于 method.__get__(cls, type(cls)).__call__(***)   绑定到类后调用
                         #   或者 MethodType(method, cls).__call__(***)
     """
+    # 根据 instance 是否为 None，将 method 绑定到类/实例上
     def __get__(self, instance: object, owner: tp.Optional[tp.Type] = None) -> tp.Any:
         descr_get = super().__get__ if instance is None else self.__func__.__get__
         return descr_get(instance, owner)
@@ -600,77 +601,53 @@ __pdoc__['binary_magic_config'] = f"""Config of binary magic methods to be added
 {binary_magic_config.to_doc()}
 ```
 """
-
+# 二元函数类型，接受两个操作数和一个 NumPy 函数，返回一个结果
 BinaryTranslateFuncT = tp.Callable[[tp.Any, tp.Any, tp.Callable], tp.Any]
 
 
 def attach_binary_magic_methods(translate_func: BinaryTranslateFuncT,
                                 config: tp.Optional[Config] = None) -> WrapperFuncT:
     """
-    类装饰器，用于为类批量添加二元魔术方法。
+    类装饰器（即装饰一个类），用于为类批量添加二元魔术方法。
     
-    该装饰器实现了运算符重载的自动化，通过配置文件定义的映射关系，
-    为类添加各种二元运算符的支持。这种设计模式在数值计算库中非常常见，
-    可以让自定义类像内置数值类型一样支持各种运算操作。
-    
-    工作原理：
-    1. 读取配置中定义的魔术方法名和对应的 NumPy 函数
-    2. 为每个魔术方法创建一个新的方法实现
-    3. 新方法调用用户提供的 translate_func 来处理实际运算
-    4. 将新方法动态添加到目标类中
+    假设装饰一个类 cls，则：
+    对于装饰参数即二元运算函数translate_func：
+        对于装饰参数 config（如果None，则是 binary_magic_config）.items()中的每一项 i（类似于 '__eq__': dict(func=np.equal)）：
+            构建函数 new_method(self, other)：return translate_func(self, other, i.value['func'])
+            设置 new_method.__qualname__ = f"{cls.__name__}.{i.key}"
+            设置 new_method.__name__ = i.key
+            设置 cls.__dict__[i.key] = new_method
+    返回 cls
     
     使用示例：
-        # 定义转换函数
+        # 定义转换函数 - 实现具体的运算逻辑
         def my_translate_func(self, other, numpy_func):
-            # 将 self 和 other 转换为 NumPy 数组
+            '''处理两个操作数之间的运算'''
+            # 将操作数转换为 NumPy 数组进行计算
             arr1 = np.asarray(self.data)
             arr2 = np.asarray(other.data if hasattr(other, 'data') else other)
-            # 使用 NumPy 函数进行运算
+            # 使用 NumPy 函数进行向量化运算
             result = numpy_func(arr1, arr2)
-            # 返回包装后的结果
+            # 返回与原对象相同类型的新对象
             return MyClass(result)
         
-        # 应用装饰器
+        # 应用装饰器 - 为类添加所有二元运算符
         @attach_binary_magic_methods(my_translate_func)
         class MyClass:
             def __init__(self, data):
                 self.data = data
+            
+            def __repr__(self):
+                return f"MyClass({self.data})"
         
-        # 现在可以使用运算符
+        # 现在可以使用各种运算符
         obj1 = MyClass([1, 2, 3])
         obj2 = MyClass([4, 5, 6])
-        result = obj1 + obj2  # 自动调用 __add__ 方法
         
-        # 也支持与标量运算
-        result2 = obj1 * 2    # 自动调用 __mul__ 方法
-    
-    Args:
-        translate_func (BinaryTranslateFuncT): 转换函数，负责处理实际的二元运算逻辑
-            - 第一个参数 self: 运算的左操作数（当前对象实例）
-            - 第二个参数 other: 运算的右操作数（可以是任何类型）
-            - 第三个参数 func: 要执行的 NumPy 运算函数（如 np.add, np.multiply 等）
-            - 返回值: 运算结果，通常是与 self 相同类型的新对象
-            
-        config (tp.Optional[Config], optional): 魔术方法配置对象。默认为 None。
-            - 如果为 None，则使用 binary_magic_config 作为默认配置
-            - 配置对象应包含魔术方法名作为键，包含 'func' 键的字典作为值
-            - 'func' 键对应的值应该是可调用的 NumPy 函数
-    
-    Returns:
-        WrapperFuncT: 类装饰器函数
-            - 接受一个类作为参数
-            - 返回添加了魔术方法的同一个类
-            - 不改变类的继承关系或其他属性
-    
-    注意事项：
-        1. translate_func 必须能够处理不同类型的 other 参数
-        2. 返回的对象类型应该与原对象兼容
-        3. 魔术方法的添加是动态的，在类定义时完成
-        4. 如果类已经定义了同名的魔术方法，会被覆盖
-    
-    异常处理：
-        - 如果 config 中的 'func' 不是可调用对象，可能在运行时抛出 TypeError
-        - 如果 translate_func 无法处理某些参数组合，应该在其内部处理异常
+        # 算术运算
+        result_add = obj1 + obj2      # 调用 __add__ -> [5, 7, 9]
+        result_mul = obj1 * 2         # 调用 __mul__ -> [2, 4, 6]
+        result_pow = obj1 ** 2        # 调用 __pow__ -> [1, 4, 9]
     """
     if config is None:
         config = binary_magic_config
@@ -678,7 +655,6 @@ def attach_binary_magic_methods(translate_func: BinaryTranslateFuncT,
     def wrapper(cls: tp.Type[tp.T]) -> tp.Type[tp.T]:
         for target_name, settings in config.items():
             func = settings['func']
-
             def new_method(self,
                            other: tp.Any,
                            _translate_func: BinaryTranslateFuncT = translate_func,
@@ -687,12 +663,12 @@ def attach_binary_magic_methods(translate_func: BinaryTranslateFuncT,
 
             new_method.__qualname__ = f"{cls.__name__}.{target_name}"
             new_method.__name__ = target_name
+            # 相当于：cls.__dict__[target_name] = new_method
             setattr(cls, target_name, new_method)
         return cls
-
     return wrapper
 
-
+# 一元魔术方法配置对象，用于批量为类添加一元魔术方法
 unary_magic_config = Config(
     {
         '__neg__': dict(func=np.negative),
@@ -711,24 +687,22 @@ __pdoc__['unary_magic_config'] = f"""Config of unary magic methods to be added t
 {unary_magic_config.to_doc()}
 ```
 """
-
+# 一元函数类型，接受一个操作数和一个 NumPy 函数，返回一个结果
 UnaryTranslateFuncT = tp.Callable[[tp.Any, tp.Callable], tp.Any]
 
 
 def attach_unary_magic_methods(translate_func: UnaryTranslateFuncT,
                                config: tp.Optional[Config] = None) -> WrapperFuncT:
-    """Class decorator to add unary magic methods to a class.
-
-    `translate_func` should
-
-    * take `self` and unary function,
-    * perform computation, and
-    * return the result.
-
-    `config` defaults to `unary_magic_config` and should contain target method names (keys)
-    and dictionaries (values) with the following keys:
-
-    * `func`: Function that transforms one array-like object.
+    """
+    类装饰器（即装饰一个类），用于为类批量添加一元魔术方法。
+    
+    假设装饰一个类 cls，则：
+    对于装饰参数即一元运算函数translate_func：
+        对于装饰参数 config（如果None，则是 unary_magic_config）.items()中的每一项 i（类似于 '__neg__': dict(func=np.negative)）：
+            构建函数 new_method(self)：return translate_func(self, i.value['func'])
+            设置 new_method.__qualname__ = f"{cls.__name__}.{i.key}"
+            设置 new_method.__name__ = i.key
+            设置 cls.__dict__[i.key] = new_method
     """
     if config is None:
         config = unary_magic_config

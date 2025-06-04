@@ -226,13 +226,13 @@ class ColumnGrouper(Configured):
     它不仅支持多种分组方式，还提供了权限控制、缓存优化和分组状态管理等高级功能。
     """
 
-    def __init__(self, columns: tp.Index, group_by: tp.GroupByLike = None, allow_enable: bool = True,
-                 allow_disable: bool = True, allow_modify: bool = True) -> None:
-        """初始化列分组器实例。
-        
-        构造函数负责验证输入参数、设置分组映射、配置权限控制，并调用父类的初始化方法。
-        所有参数都会被存储为私有属性，以支持不可变设计模式和缓存优化。
-        
+    def __init__(self, 
+                columns: tp.Index,  # 要进行分组的原始列索引
+                group_by: tp.GroupByLike = None,  # 分组映射器
+                allow_enable: bool = True,  # 是否允许启用分组
+                allow_disable: bool = True,  # 是否允许禁用分组
+                allow_modify: bool = True) -> None: # 是否允许修改分组
+        """
         Args:
             columns (tp.Index): 要进行分组的原始列索引
                               必须是pandas Index对象，表示DataFrame的列标识
@@ -246,21 +246,8 @@ class ColumnGrouper(Configured):
                                                - int: 按MultiIndex指定位置级别分组
                                                - str: 按MultiIndex指定名称级别分组
                                                - sequence: 自定义分组映射
-                                               
-            allow_enable (bool, optional): 是否允许启用分组，默认为True
-                                         当group_by为None时，控制是否可以后续启用分组
-                                         设为False可防止意外启用分组操作
-                                         
-            allow_disable (bool, optional): 是否允许禁用分组，默认为True
-                                          当group_by不为None时，控制是否可以后续禁用分组
-                                          设为False可防止意外禁用分组操作
-                                          
-            allow_modify (bool, optional): 是否允许修改分组，默认为True
-                                         控制是否可以更改分组结构（不影响标签更改）
-                                         设为False可防止分组结构被意外修改
         """
-        # 调用父类Configured的初始化方法，传递所有参数以支持配置管理功能
-        # Configured类提供了配置序列化、缓存和不可变性等基础设施
+        # 将参数 columns, group_by, allow_enable, allow_disable, allow_modify 和 settings['configured']['config'] 合并到 self._config
         Configured.__init__(
             self,
             columns=columns,
@@ -274,7 +261,6 @@ class ColumnGrouper(Configured):
         self._columns = columns  
         
         if group_by is None or group_by is False:
-            # 当不需要分组时，将group_by设置为None，表示禁用分组状态
             self._group_by = None
         else:
             self._group_by = group_by_to_index(columns, group_by)
@@ -304,7 +290,6 @@ class ColumnGrouper(Configured):
         return self._allow_modify
 
     def is_grouped(self, group_by: tp.GroupByLike = None) -> bool:
-        '''判断group_by或self.group_by不为None'''
         if group_by is False:
             return False
         if group_by is None:
@@ -312,210 +297,73 @@ class ColumnGrouper(Configured):
         return group_by is not None
 
     def is_grouping_enabled(self, group_by: tp.GroupByLike = None) -> bool:
-        '''判断group_by为None而self.group_by不为None'''
+        """
+        检查是否 self.group_by 为 None 且 group_by 不为 None
+        """
         return self.group_by is None and self.is_grouped(group_by=group_by)
 
     def is_grouping_disabled(self, group_by: tp.GroupByLike = None) -> bool:
-        '''判断group_by和self.group_by都不为None'''
+        """
+        检查是否 self.group_by 不为 None 且 group_by 为 None
+        """
         return self.group_by is not None and not self.is_grouped(group_by=group_by)
 
     @cached_method
     def is_grouping_modified(self, group_by: tp.GroupByLike = None) -> bool:
-        """检查列分组是否已被修改。
-        
-        此方法检测分组结构是否发生变化，但不关心分组标签的更改。
-        这是一个缓存方法，避免重复计算复杂的分组比较操作。
-        
-        分组修改的判断逻辑：
-        1. 首先排除无效输入和相同状态的情况
-        2. 对于两个都是Index的情况，先比较Index是否相等
-        3. 如果Index不相等，则比较实际的分组编码数组
-        4. 只有分组编码数组不同时才认为是真正的修改
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 要检查的分组规范，默认为None
-                                               用于与当前分组状态进行比较
-        
-        Returns:
-            bool: True表示分组结构已修改，False表示分组结构未修改
-                 注意：标签名称的更改不被视为修改
-                 
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['tech', 'tech', 'finance', 'finance']
-            ... )
-            >>> # 标签更改但结构相同：不算修改
-            >>> is_modified1 = grouper.is_grouping_modified(['technology', 'technology', 'financial', 'financial'])
-            >>> print(is_modified1)  # False
-            
-            >>> # 结构更改：算修改
-            >>> is_modified2 = grouper.is_grouping_modified(['tech', 'finance', 'tech', 'finance'])  
-            >>> print(is_modified2)  # True
         """
-        # 处理无效输入：None或(False且当前为None)的情况
+        检查 self.group_by 是否和 group_by_to_index(self.columns, group_by) 不一致
+        """
         if group_by is None or (group_by is False and self.group_by is None):
             return False
             
-        # 将输入的group_by转换为标准格式以便比较
         group_by = group_by_to_index(self.columns, group_by)
         
-        # 当两个分组都是Index对象时，进行详细比较
         if isinstance(group_by, pd.Index) and isinstance(self.group_by, pd.Index):
             # 首先检查Index对象是否完全相等（包括值、顺序、名称等）
             if not pd.Index.equals(group_by, self.group_by):
-                # 如果Index不相等，获取实际的分组编码进行比较
-                # 分组编码反映了真正的分组结构，不受标签名称影响
+                # 如果Index不相等，获取实际的分组编码进行比较，分组编码反映了分组结构，不受标签名称影响
                 groups1 = get_groups_and_index(self.columns, group_by)[0]
                 groups2 = get_groups_and_index(self.columns, self.group_by)[0]
-                # 只有当分组编码数组不同时，才认为分组结构真正被修改
                 if not np.array_equal(groups1, groups2):
                     return True
-            # Index相等或分组编码相等的情况：未修改
             return False
-        # 其他情况（类型不同等）：认为已修改
         return True
 
     @cached_method
     def is_grouping_changed(self, group_by: tp.GroupByLike = None) -> bool:
-        """检查列分组是否发生任何形式的变化。
-        
-        此方法检测分组是否发生任何变化，包括结构修改、标签更改、启用/禁用等。
-        这是最宽泛的变化检测方法，用于判断是否需要重新计算相关的缓存数据。
-        
-        变化检测的逻辑：
-        1. 排除无效输入和相同状态的情况
-        2. 对于Index类型，使用pandas的equals方法进行精确比较
-        3. 任何差异（包括值、顺序、名称、类型）都被视为变化
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 要检查的分组规范，默认为None
-                                               用于与当前分组状态进行比较
-        
-        Returns:
-            bool: True表示分组发生任何变化，False表示分组完全相同
-                 变化包括：结构修改、标签更改、启用、禁用等所有情况
-                 
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['tech', 'tech', 'finance', 'finance']
-            ... )
-            >>> # 标签名称更改：算变化
-            >>> is_changed1 = grouper.is_grouping_changed(['technology', 'technology', 'finance', 'finance'])
-            >>> print(is_changed1)  # True
-            
-            >>> # 完全相同：不算变化
-            >>> is_changed2 = grouper.is_grouping_changed(['tech', 'tech', 'finance', 'finance'])
-            >>> print(is_changed2)  # False
-            
-            >>> # 禁用分组：算变化
-            >>> is_changed3 = grouper.is_grouping_changed(False)
-            >>> print(is_changed3)  # True
         """
-        # 处理无效输入：None或(False且当前为None)的情况
+        检查 self.group_by 是否和 group_by 完全不一致
+        """
         if group_by is None or (group_by is False and self.group_by is None):
             return False
             
-        # 当两个分组都是Index对象时，使用pandas的精确比较
         if isinstance(group_by, pd.Index) and isinstance(self.group_by, pd.Index):
             # pd.Index.equals会比较所有方面：值、顺序、名称、类型等
             if pd.Index.equals(group_by, self.group_by):
                 return False
-        # 其他所有情况都被视为变化
         return True
 
     def is_group_count_changed(self, group_by: tp.GroupByLike = None) -> bool:
-        """检查分组数量是否发生变化。
-        
-        此方法专门检测分组的数量是否改变，不关心分组的具体内容或标签。
-        这对于需要根据分组数量调整数据结构或算法的场景非常有用。
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 要检查的分组规范，默认为None
-                                               用于与当前分组状态进行比较
-        
-        Returns:
-            bool: True表示分组数量发生变化，False表示分组数量未变化
-                 数量比较只在两个都是Index对象时进行
-                 
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['g1', 'g1', 'g2', 'g3']  # 3个分组
-            ... )
-            >>> # 相同数量的分组：未变化
-            >>> is_count_changed1 = grouper.is_group_count_changed(['x', 'x', 'y', 'z'])  # 3个分组
-            >>> print(is_count_changed1)  # False
-            
-            >>> # 不同数量的分组：已变化  
-            >>> is_count_changed2 = grouper.is_group_count_changed(['x', 'x', 'x', 'x'])  # 1个分组
-            >>> print(is_count_changed2)  # True
         """
-        # 处理无效输入：None或(False且当前为None)的情况
+        检查 self.group_by 和 group_by 的长度是否不一致
+        """
         if group_by is None or (group_by is False and self.group_by is None):
             return False
-            
-        # 只有当两个分组都是Index对象时才能比较数量
+
         if isinstance(group_by, pd.Index) and isinstance(self.group_by, pd.Index):
-            # 比较两个Index的长度（即唯一分组的数量）
             return len(group_by) != len(self.group_by)
-        # 其他情况（类型不同等）：默认认为数量已变化
         return True
 
-    def check_group_by(self, group_by: tp.GroupByLike = None, allow_enable: tp.Optional[bool] = None,
-                       allow_disable: tp.Optional[bool] = None, allow_modify: tp.Optional[bool] = None) -> None:
-        """根据权限设置检查传入的group_by对象是否被允许。
-        
-        此方法是权限控制的核心实现，确保所有分组操作都符合创建时设定的权限约束。
-        它会检查启用、禁用、修改等操作的权限，并在违反权限时抛出异常。
-        
-        权限检查逻辑：
-        1. 首先解析权限参数（使用传入值或对象默认值）
-        2. 然后依次检查启用、禁用、修改权限
-        3. 对于每种操作，都会验证是否被明确禁止
-        4. 任何权限违反都会立即抛出ValueError异常
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 要检查的分组规范，默认为None
-                                               将检查此分组规范是否符合权限要求
-            allow_enable (tp.Optional[bool], optional): 是否允许启用分组，默认为None
-                                                      None时使用对象的allow_enable设置
-            allow_disable (tp.Optional[bool], optional): 是否允许禁用分组，默认为None
-                                                       None时使用对象的allow_disable设置
-            allow_modify (tp.Optional[bool], optional): 是否允许修改分组，默认为None
-                                                      None时使用对象的allow_modify设置
-        
-        Raises:
-            ValueError: 当检测到权限违反时抛出，包含具体的违反类型信息
-                       - "Enabling grouping is not allowed": 禁止启用分组
-                       - "Disabling grouping is not allowed": 禁止禁用分组  
-                       - "Modifying groups is not allowed": 禁止修改分组
-                       
-        Examples:
-            >>> # 创建禁止启用分组的grouper
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B']), 
-            ...     group_by=None,
-            ...     allow_enable=False
-            ... )
-            >>> try:
-            ...     grouper.check_group_by([0, 1])  # 尝试启用分组
-            ... except ValueError as e:
-            ...     print(e)  # "Enabling grouping is not allowed"
-            
-            >>> # 创建禁止修改分组的grouper
-            >>> grouper2 = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=[0, 0, 1, 1],
-            ...     allow_modify=False
-            ... )
-            >>> try:
-            ...     grouper2.check_group_by([0, 1, 0, 1])  # 尝试修改分组结构
-            ... except ValueError as e:
-            ...     print(e)  # "Modifying groups is not allowed"
+    def check_group_by(self, 
+                       group_by: tp.GroupByLike = None, 
+                       allow_enable: tp.Optional[bool] = None,
+                       allow_disable: tp.Optional[bool] = None, 
+                       allow_modify: tp.Optional[bool] = None) -> None:
         """
-        # 解析权限参数：使用传入值或对象默认值
+        如果 self.group_by 为 None 且 group_by 不为 None 并且 allow_enable 为 False，则抛出异常
+        如果 self.group_by 不为 None 且 group_by 为 None 并且 allow_disable 为 False，则抛出异常
+        如果 self.group_by 和 group_by 不一致 并且 allow_modify 为 False，则抛出异常
+        """
         if allow_enable is None:
             allow_enable = self.allow_enable
         if allow_disable is None:
@@ -523,150 +371,33 @@ class ColumnGrouper(Configured):
         if allow_modify is None:
             allow_modify = self.allow_modify
 
-        # 检查分组启用权限
         if self.is_grouping_enabled(group_by=group_by):
             if not allow_enable:
                 raise ValueError("Enabling grouping is not allowed")
-        # 检查分组禁用权限
         elif self.is_grouping_disabled(group_by=group_by):
             if not allow_disable:
                 raise ValueError("Disabling grouping is not allowed")
-        # 检查分组修改权限
         elif self.is_grouping_modified(group_by=group_by):
             if not allow_modify:
                 raise ValueError("Modifying groups is not allowed")
 
     def resolve_group_by(self, group_by: tp.GroupByLike = None, **kwargs) -> GroupByT:
-        """解析group_by参数，从对象变量或关键字参数中获取分组规范。
-        
-        此方法是分组参数标准化的入口点，它会处理参数解析、权限检查和格式转换。
-        大多数需要分组参数的方法都会首先调用此方法来获得统一的分组规范。
-        
-        解析逻辑：
-        1. 参数解析：优先使用传入的group_by，否则使用对象的group_by
-        2. 特殊处理：False与None的等价转换
-        3. 权限检查：确保操作符合权限设置
-        4. 格式转换：统一转换为标准的Index格式
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 分组规范，默认为None
-                                               None时使用对象的group_by属性
-            **kwargs: 额外的关键字参数，传递给check_group_by方法进行权限检查
-        
-        Returns:
-            GroupByT: 解析后的分组对象，类型为Union[None, bool, tp.Index]
-                     已经过权限检查和格式标准化处理
-                     
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['tech', 'tech', 'finance', 'finance']
-            ... )
-            >>> # 使用对象默认的group_by
-            >>> resolved1 = grouper.resolve_group_by()
-            >>> print(type(resolved1))  # <class 'pandas.core.indexes.base.Index'>
-            
-            >>> # 使用指定的group_by
-            >>> resolved2 = grouper.resolve_group_by([0, 0, 1, 1])
-            >>> print(type(resolved2))  # <class 'pandas.core.indexes.base.Index'>
-            
-            >>> # False与None的等价处理
-            >>> grouper_none = ColumnGrouper(columns=pd.Index(['A', 'B']), group_by=None)
-            >>> resolved3 = grouper_none.resolve_group_by(False)
-            >>> print(resolved3)  # None
-        """
-        # 参数解析：优先使用传入值，否则使用对象属性
         if group_by is None:
             group_by = self.group_by
-        # 特殊处理：当对象group_by为None时，False等价于None
         if group_by is False and self.group_by is None:
             group_by = None
-        # 权限检查：确保操作符合权限设置
         self.check_group_by(group_by=group_by, **kwargs)
-        # 格式转换：统一转换为标准格式
         return group_by_to_index(self.columns, group_by)
 
     @cached_method
     def get_groups_and_columns(self, group_by: tp.GroupByLike = None, **kwargs) -> tp.Tuple[tp.Array1d, tp.Index]:
-        """获取分组编码数组和分组后的列索引。
-        
-        此方法是分组信息获取的核心接口，返回分组操作所需的两个关键数据：
-        分组编码数组（指示每列属于哪个组）和新的列索引（包含分组标识）。
-        这是一个缓存方法，避免重复计算相同的分组结果。
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 分组规范，默认为None
-                                               使用resolve_group_by方法进行解析
-            **kwargs: 额外的关键字参数，传递给resolve_group_by方法
-        
-        Returns:
-            tp.Tuple[tp.Array1d, tp.Index]: 包含两个元素的元组：
-                - 第一个元素：分组编码数组，整数数组，指示每列属于哪个组
-                - 第二个元素：分组后的新列索引，包含唯一的分组标识
-                
-        See Also:
-            get_groups_and_index: 底层实现函数，处理具体的分组逻辑
-            
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['AAPL', 'GOOGL', 'MSFT', 'AMZN']), 
-            ...     group_by=['tech', 'tech', 'tech', 'tech']
-            ... )
-            >>> groups, columns = grouper.get_groups_and_columns()
-            >>> print(f"分组编码: {groups}")    # [0, 0, 0, 0]
-            >>> print(f"新列索引: {columns}")   # Index(['tech'], dtype='object')
-        """
-        # 解析分组参数，包括权限检查和格式转换
         group_by = self.resolve_group_by(group_by=group_by, **kwargs)
-        # 调用底层函数进行实际的分组计算
         return get_groups_and_index(self.columns, group_by)
 
     def get_groups(self, **kwargs) -> tp.Array1d:
-        """返回分组编码数组。
-        
-        此方法是get_groups_and_columns的简化版本，只返回分组编码数组部分。
-        分组编码数组是一个整数数组，指示原始列索引中每个位置的元素属于哪个组。
-        
-        Args:
-            **kwargs: 关键字参数，传递给get_groups_and_columns方法
-        
-        Returns:
-            tp.Array1d: 一维整数数组，包含每列的分组编码
-                       数组长度等于原始列数，值为0到(分组数-1)的整数
-                       
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['g1', 'g1', 'g2', 'g2']
-            ... )
-            >>> groups = grouper.get_groups()
-            >>> print(groups)  # [0, 0, 1, 1]
-        """
-        # 获取分组信息并返回第一个元素（分组编码数组）
         return self.get_groups_and_columns(**kwargs)[0]
 
     def get_columns(self, **kwargs) -> tp.Index:
-        """返回分组后的新列索引。
-        
-        此方法是get_groups_and_columns的简化版本，只返回分组后的列索引部分。
-        新列索引包含所有唯一的分组标识，保持分组的原始顺序和元数据。
-        
-        Args:
-            **kwargs: 关键字参数，传递给get_groups_and_columns方法
-        
-        Returns:
-            tp.Index: 分组后的新列索引，包含唯一的分组标识
-                     长度等于分组数量，保持原始分组值的数据类型
-                     
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['tech', 'tech', 'finance', 'healthcare']
-            ... )
-            >>> new_columns = grouper.get_columns()
-            >>> print(new_columns)  # Index(['tech', 'finance', 'healthcare'], dtype='object')
-        """
-        # 获取分组信息并返回第二个元素（新列索引）
         return self.get_groups_and_columns(**kwargs)[1]
 
     @cached_method

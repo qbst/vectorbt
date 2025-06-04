@@ -1041,31 +1041,14 @@ ConfiguredT = tp.TypeVar("ConfiguredT", bound="Configured")
 
 
 class Configured(Pickleable, Documented):
-    """
-    具有初始化配置的类。
-    
-    所有Configured的子类都使用Config进行初始化，这使得序列化更加容易。
-    
-    设置定义在vectorbt._settings.settings的configured下。
-    
-    警告:
-        如果任何不在Configured.writeable_attrs中列出的属性被覆盖，
-        或者如果任何Configured.__init__参数依赖于全局默认值，
-        它们的值将不会被复制。确保显式传递它们以使保存和加载/复制的实例
-        对全局变化具有弹性。
-    """
 
     def __init__(self, **config) -> None:
         """
-        初始化Configured对象。
-        
-        参数:
-            **config: 初始化配置
+        将参数 config 和 settings['configured']['config'] 合并到 self._config
         """
         from vectorbt._settings import settings
         configured_cfg = settings['configured']
 
-        # 将传入的 config 和 configured_cfg['config'] 合并存到 self._config 中
         self._config = Config(config, **configured_cfg['config'])
 
     @property

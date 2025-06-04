@@ -456,22 +456,31 @@ class cached_methodT(custom_methodT):
 def cached_method(*args, maxsize: int = 128, typed: bool = False,
                   **flags) -> tp.Union[tp.Callable, cached_methodT]:
     """
-    函数装饰器
+    函数装饰器：
+        装饰某个函数后，该函数调用类似于 (instance, *args, **kwargs) 
+        调用时，会为 instance 的 __dict__ 中添加 lru_cache 化的原函数
+        即可以为 instance 保存：所有使用它的 cached_method 装饰的函数，并且具体调用参数和结果进行了LRU缓存
+    
     ① 无参调用：
     >>> @cached_method
     ... def func(): pass
-    获得的是 wrapper(instance: object, *args, **kwargs)：
+    # 获得的是 wrapper(instance: object, *args, **kwargs)：
         相较于 func 增加了 .func, .flags, .maxsize, .typed, .name, .attrname（'__cached_' + func.__name__ ）
                             .lock, .clear_cache 属性
         调用时
             查找 instance.__dict__ 中对应 wrapper.attrname 的方法 cached_func，如果没有则
                 创建一个 lru_cache 装饰 func 后的 cached_func，并将 wrapper.attrname: cached_func 存到 instance.__dict__
-            如果 args 和 kwargs 可哈希，返回 cached_func(*args, **kwargs)，否则返回 func(instance, *args, **kwargs)
+            如果 args 和 kwargs 可哈希，调用 cached_func(*args, **kwargs)，否则调用 func(instance, *args, **kwargs)
                 
     ② 含字典参数调用：
         >>> @cached_method(flag1=value1, flag2=value2)  # flags
         ... def func(): pass
-        获得的是 decorator:tp.Callable——>cached_methodT
+        # 获得的是 tp.Callable——>cached_methodT
+        # 须手动调用 func(target_function) -> wrapper
+        
+    LRU：基础是一个Hash表，put/get/remove 都是 O(1) 平均时间复杂度
+        在此基础上，附加一个双向链表，将最近访问(get/put)的元素放在链表头部。
+        当缓存满时，删除链表尾部的元素。
     """
 
     def decorator(func: tp.Callable) -> cached_methodT:

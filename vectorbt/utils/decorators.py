@@ -15,7 +15,7 @@ from vectorbt.utils.config import Config
 
 class class_or_instancemethod(classmethod):
     """
-    类/实例方法装饰器
+    方法装饰器，类/实例方法形式调用
     @class_or_instancemethod
     def method():...    # method = class_or_instancemethod(method)
     
@@ -31,7 +31,7 @@ class class_or_instancemethod(classmethod):
 
 class classproperty(object):
     """
-    类属性装饰器
+    方法装饰器，类/实例属性形式调用
     @classproperty
     def property():...  # property = classproperty(property)
     
@@ -54,7 +54,7 @@ class classproperty(object):
 
 class class_or_instanceproperty(object):
     """
-    类/实例属性装饰器
+    方法装饰器，类/实例属性形式调用
     @class_or_instanceproperty
     def property():...  # property = class_or_instanceproperty(property)
     obj/Class.property  # 等价于 property(obj/Class)
@@ -79,7 +79,7 @@ custom_propertyT = tp.TypeVar("custom_propertyT", bound="custom_property")
 
 class custom_property:
     """
-    实例属性装饰器
+    方法装饰器，实例属性形式调用
     两种装饰方式：
         @custom_property(a=0, b=0)  # flags
         def property(): ...
@@ -301,7 +301,22 @@ _NOT_FOUND = object()
 
 class cached_property(custom_property):
     """
-    继承 custom_property（实例属性装饰器），在此基础上增加了将实例属性调用结果存储到实例字典的功能
+    方法装饰器，实例属性形式调用。继承自 custom_property，在此基础上增加了将实例属性调用结果存储到实例字典的功能
+    
+    两种装饰方式：
+        @cached_property(a=0, b=0)  # flags
+        def property(): ...
+        等价于 property = cached_property(a=0, b=0)(property)
+        其中 cached_property(a=0, b=0) 返回一个 lambda 表达式，从而进一步构建 cls(property)
+    或
+        @cached_property
+        def property(): ...
+        
+    
+    obj.property        # 等价于 property(obj)，并且会将 '__cached_property': property(obj) 写入 obj.__dict__
+    Class.property      # 返回该描述符property本身
+    obj.property = 1    # 抛出异常
+    obj.property(***)   # pass，待实现
     """
 
     def __init__(self, func: tp.Callable, **flags) -> None:
@@ -330,11 +345,8 @@ class cached_property(custom_property):
 
     def __set_name__(self, owner: tp.Type, name: str) -> None:
         """
-        设置描述符在所属类中的属性名
-        
-        Args:
-            owner (tp.Type): 所属的类
-            name (str): 属性名称
+        设置描述符被创建时的名称
+
         例子：
             class MyDescriptor:
                 def __set_name__(self, owner, name):...  
@@ -391,23 +403,16 @@ class custom_methodT(tp.Protocol):
 
 def custom_method(*args, **flags) -> tp.Union[tp.Callable, custom_methodT]:
     """
-    装饰器
-    可以像这样调用：
-    ```pycon
+    函数装饰器，给被装饰的函数添加 .func 和 .flags 属性
+    (1) 无参装饰
     >>> @custom_method
     ... def func(): pass
-    # 获得的是 wrapper（相较于被装饰的函数添加了 func 和 flags 属性）
-    ```
-    也可以像这样调用：
-    ```pycon
+
+    (2) 含字典参数装饰
     >>> @custom_method(flag1=value1, flag2=value2)  # flags
     ... def func(): pass
-    # 获得的是 decorator:tp.Callable——>custom_methodT
-    ```
-    作用是：为被包装函数提供 flags 属性
-
-    Returns:
-        tp.Union[tp.Callable, custom_methodT]: _description_
+    # 获得的是 tp.Callable——>custom_methodT
+    # 须手动调用 func(target_function) -> wrapper
     """
 
     def decorator(func: tp.Callable) -> custom_methodT:
@@ -451,33 +456,25 @@ class cached_methodT(custom_methodT):
 def cached_method(*args, maxsize: int = 128, typed: bool = False,
                   **flags) -> tp.Union[tp.Callable, cached_methodT]:
     """
-    装饰器
+    函数装饰器
     ① 无参调用：
-        ```pycon
-        >>> @cached_method
-        ... def func(): pass
-        ```
-        获得的是 wrapper：
-            返回 func，其增加了 func, flags, maxsize, typed, name, attrname, lock, clear_cache 属性
-            如果 instance.__dict__ 中没有 wrapper.attrname 方法，
-                创建一个 lru_cache 装饰的func，并将其存储到 instance.__dict__ 中
-                如果 args 和 kwargs 可哈希，返回该 lru_cache 装饰后的func
-    ② 含参调用：
-        ```pycon
+    >>> @cached_method
+    ... def func(): pass
+    获得的是 wrapper(instance: object, *args, **kwargs)：
+        相较于 func 增加了 .func, .flags, .maxsize, .typed, .name, .attrname（'__cached_' + func.__name__ ）
+                            .lock, .clear_cache 属性
+        调用时
+            查找 instance.__dict__ 中对应 wrapper.attrname 的方法 cached_func，如果没有则
+                创建一个 lru_cache 装饰 func 后的 cached_func，并将 wrapper.attrname: cached_func 存到 instance.__dict__
+            如果 args 和 kwargs 可哈希，返回 cached_func(*args, **kwargs)，否则返回 func(instance, *args, **kwargs)
+                
+    ② 含字典参数调用：
         >>> @cached_method(flag1=value1, flag2=value2)  # flags
         ... def func(): pass
-        ```
         获得的是 decorator:tp.Callable——>cached_methodT
     """
 
     def decorator(func: tp.Callable) -> cached_methodT:
-        """
-        返回 func，其增加了 func, flags, maxsize, typed, name, attrname, lock, clear_cache 属性
-        如果 instance.__dict__ 中没有 wrapper.attrname 方法，
-            创建一个 lru_cache 装饰的func，并将其存储到 instance.__dict__ 中
-            如果 args 和 kwargs 可哈希，返回该 lru_cache 装饰后的func
-        """
-        
         # 使用 functools.wraps 保持原方法的元数据，确保 __name__, __doc__, __module__ 等属性正确传递
         @wraps(func)
         def wrapper(instance: object, *args, **kwargs) -> tp.Any:

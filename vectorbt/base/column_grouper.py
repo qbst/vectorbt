@@ -179,11 +179,6 @@ def get_group_lens_nb(groups: tp.Array1d) -> tp.Array1d:
 
 
 class ColumnGrouper(Configured):
-    """列分组器类：用于管理DataFrame列的分组操作的核心工具类。
-    
-    该类是vectorbt库中列分组功能的核心实现，为DataFrame列提供了完整的分组管理基础设施。
-    它不仅支持多种分组方式，还提供了权限控制、缓存优化和分组状态管理等高级功能。
-    """
 
     def __init__(self, 
                 columns: tp.Index,  # 要进行分组的原始列索引
@@ -361,195 +356,31 @@ class ColumnGrouper(Configured):
 
     @cached_method
     def is_sorted(self, group_by: tp.GroupByLike = None, **kwargs) -> bool:
-        """检查分组是否是连贯且已排序的。
-        
-        此方法验证分组编码是否满足连贯且已排序的要求，这是使用高性能的
-        get_group_lens_nb函数的前提条件。连贯且已排序意味着相同组的元素
-        必须连续出现，且组编号按顺序递增。
-        
-        这是一个缓存方法，避免重复检查相同的分组配置。
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 分组规范，默认为None
-                                               使用resolve_group_by方法进行解析
-            **kwargs: 额外的关键字参数，传递给resolve_group_by方法
-        
-        Returns:
-            bool: True表示分组是连贯且已排序的，False表示不满足要求
-                 满足要求的示例：[0, 0, 0, 1, 1, 2, 2, 2]
-                 不满足要求的示例：[0, 1, 0, 2, 1]（不连贯）
-                 
-        Examples:
-            >>> # 满足要求的分组
-            >>> grouper1 = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D', 'E']), 
-            ...     group_by=[0, 0, 1, 1, 1]
-            ... )
-            >>> print(grouper1.is_sorted())  # True
-            
-            >>> # 不满足要求的分组
-            >>> grouper2 = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=[0, 1, 0, 1]  # 相同组不连续
-            ... )
-            >>> print(grouper2.is_sorted())  # False
-        """
-        # 解析分组参数，包括权限检查和格式转换
         group_by = self.resolve_group_by(group_by=group_by, **kwargs)
-        # 获取分组编码数组
         groups = self.get_groups(group_by=group_by)
-        # 使用工具函数检查数组是否已排序
         return is_sorted(groups)
 
     @cached_method
     def get_group_lens(self, group_by: tp.GroupByLike = None, **kwargs) -> tp.Array1d:
-        """获取每个分组的元素数量。
-        
-        此方法计算每个分组包含的元素数量，返回一个数组，其中第i个元素
-        表示第i个分组的大小。这是分组统计和聚合操作的基础信息。
-        
-        此方法要求分组必须是连贯且已排序的，否则会抛出异常。
-        对于无分组的情况，返回一个全为1的数组（每列自成一组）。
-        
-        Args:
-            group_by (tp.GroupByLike, optional): 分组规范，默认为None
-                                               使用resolve_group_by方法进行解析
-            **kwargs: 额外的关键字参数，传递给resolve_group_by方法
-        
-        Returns:
-            tp.Array1d: 一维整数数组，包含每个分组的元素数量
-                       数组长度等于分组数量，每个值为正整数
-                       
-        Raises:
-            ValueError: 当分组不是连贯且已排序时抛出异常
-                       错误信息："group_by must lead to groups that are coherent and sorted"
-                       
-        See Also:
-            get_group_lens_nb: 底层的Numba编译函数，提供高性能计算
-            
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D', 'E']), 
-            ...     group_by=[0, 0, 0, 1, 1]
-            ... )
-            >>> lens = grouper.get_group_lens()
-            >>> print(lens)  # [3, 2] (第0组有3个元素，第1组有2个元素)
-            
-            >>> # 无分组情况
-            >>> grouper_none = ColumnGrouper(columns=pd.Index(['A', 'B', 'C']), group_by=None)
-            >>> lens_none = grouper_none.get_group_lens()
-            >>> print(lens_none)  # [1, 1, 1] (每列自成一组)
-        """
-        # 首先检查分组是否满足连贯且已排序的要求
+        group_by = self.resolve_group_by(group_by=group_by, **kwargs)
         if not self.is_sorted(group_by=group_by):
             raise ValueError("group_by must lead to groups that are coherent and sorted "
                              "(such as [0, 0, 1, 2, 2, ...])")
-        # 解析分组参数，包括权限检查和格式转换
-        group_by = self.resolve_group_by(group_by=group_by, **kwargs)
-        # 处理无分组的情况：每列自成一组，长度都为1
         if group_by is None or group_by is False:  # no grouping
             return np.full(len(self.columns), 1)
-        # 获取分组编码数组
         groups = self.get_groups(group_by=group_by)
-        # 使用高性能的Numba函数计算分组长度
         return get_group_lens_nb(groups)
 
     @cached_method
     def get_group_count(self, **kwargs) -> int:
-        """获取分组的数量。
-        
-        此方法返回当前分组配置下的分组总数。这是一个派生属性，
-        通过计算分组长度数组的长度来获得。
-        
-        Args:
-            **kwargs: 关键字参数，传递给get_group_lens方法
-        
-        Returns:
-            int: 分组的总数量，始终为正整数
-                对于无分组情况，返回列的数量（每列自成一组）
-                
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D']), 
-            ...     group_by=['g1', 'g1', 'g2', 'g3']
-            ... )
-            >>> count = grouper.get_group_count()
-            >>> print(count)  # 3 (g1, g2, g3三个分组)
-            
-            >>> # 无分组情况
-            >>> grouper_none = ColumnGrouper(columns=pd.Index(['A', 'B']), group_by=None)
-            >>> count_none = grouper_none.get_group_count()
-            >>> print(count_none)  # 2 (每列自成一组)
-        """
-        # 通过分组长度数组的长度获取分组数量
         return len(self.get_group_lens(**kwargs))
 
     @cached_method
     def get_group_start_idxs(self, **kwargs) -> tp.Array1d:
-        """获取每个分组的起始索引数组。
-        
-        此方法计算每个分组在原始列索引中的起始位置，返回一个数组，
-        其中第i个元素表示第i个分组的第一个列的索引位置。
-        
-        起始索引的计算基于分组长度：第i个分组的起始索引等于
-        前i个分组长度的累积和减去第i个分组的长度。
-        
-        Args:
-            **kwargs: 关键字参数，传递给get_group_lens方法
-        
-        Returns:
-            tp.Array1d: 一维整数数组，包含每个分组的起始索引
-                       数组长度等于分组数量，值为0到(列数-1)的整数
-                       第一个分组的起始索引始终为0
-                       
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D', 'E']), 
-            ...     group_by=[0, 0, 0, 1, 1]  # 分组长度为[3, 2]
-            ... )
-            >>> start_idxs = grouper.get_group_start_idxs()
-            >>> print(start_idxs)  # [0, 3] (第0组从索引0开始，第1组从索引3开始)
-            
-            >>> # 验证：累积和为[3, 5]，减去长度[3, 2]得到[0, 3]
-        """
-        # 获取每个分组的长度数组
         group_lens = self.get_group_lens(**kwargs)
-        # 计算累积和，然后减去对应的长度，得到起始索引
-        # np.cumsum(group_lens) - group_lens 相当于每个位置的前缀和
         return np.cumsum(group_lens) - group_lens
 
     @cached_method
     def get_group_end_idxs(self, **kwargs) -> tp.Array1d:
-        """获取每个分组的结束索引数组。
-        
-        此方法计算每个分组在原始列索引中的结束位置（不包含），返回一个数组，
-        其中第i个元素表示第i个分组的最后一个列的索引位置+1。
-        
-        结束索引的计算直接基于分组长度的累积和，这样可以方便地
-        用于切片操作：columns[start_idx:end_idx]。
-        
-        Args:
-            **kwargs: 关键字参数，传递给get_group_lens方法
-        
-        Returns:
-            tp.Array1d: 一维整数数组，包含每个分组的结束索引（不包含）
-                       数组长度等于分组数量，值为1到列数的整数
-                       最后一个分组的结束索引等于列的总数
-                       
-        Examples:
-            >>> grouper = ColumnGrouper(
-            ...     columns=pd.Index(['A', 'B', 'C', 'D', 'E']), 
-            ...     group_by=[0, 0, 0, 1, 1]  # 分组长度为[3, 2]
-            ... )
-            >>> end_idxs = grouper.get_group_end_idxs()
-            >>> print(end_idxs)  # [3, 5] (第0组在索引3结束，第1组在索引5结束)
-            
-            >>> # 验证切片操作
-            >>> start_idxs = grouper.get_group_start_idxs()  # [0, 3]
-            >>> group_0_columns = grouper.columns[start_idxs[0]:end_idxs[0]]  # ['A', 'B', 'C']
-            >>> group_1_columns = grouper.columns[start_idxs[1]:end_idxs[1]]  # ['D', 'E']
-        """
-        # 获取每个分组的长度数组
         group_lens = self.get_group_lens(**kwargs)
-        # 计算累积和，得到每个分组的结束索引（不包含）
         return np.cumsum(group_lens)

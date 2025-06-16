@@ -282,24 +282,13 @@ class ParamLoc(LocBase):
 
 def indexing_on_mapper(mapper: tp.Series, ref_obj: tp.SeriesFrame,
                        pd_indexing_func: tp.Callable) -> tp.Optional[tp.Series]:
-    """在映射器上执行索引操作并同步维护参数映射关系
-    
-    这是一个核心工具函数，用于在对pandas对象执行索引操作时，自动同步更新相应的参数映射器。
-    该函数确保在数据筛选、重排、切片等操作后，参数映射关系始终保持与数据结构的一致性。
-    
-    核心机制:
-    1. 通过广播技术将mapper的索引位置追踪到ref_obj的每个位置
-    2. 对追踪数组执行与原数据相同的索引操作
-    3. 根据操作结果重建新的参数映射器
-    4. 返回与索引后数据结构匹配的新mapper
-    
+    """
     Args:
         mapper (tp.Series): 参数映射Series，建立列标签与参数值的对应关系
             - 索引: 原始数据的列名或行名
             - 值: 对应的参数值（如策略类型、窗口期、风险等级等）
             - 名称: 映射器的名称，用于标识参数类型
-            示例: pd.Series(['momentum', 'momentum', 'mean_reversion'], 
-                           index=['col1', 'col2', 'col3'], name='strategy_type')
+            示例: pd.Series([5, 10, 20], index=['MA_5', 'MA_10', 'MA_20'], name='window')
                            
         ref_obj (tp.SeriesFrame): 参考pandas对象，用于确定广播的目标形状
             - 可以是DataFrame或Series
@@ -309,171 +298,60 @@ def indexing_on_mapper(mapper: tp.Series, ref_obj: tp.SeriesFrame,
         pd_indexing_func (tp.Callable): pandas索引函数，要应用的具体索引操作
             - 接受pandas对象作为参数的函数
             - 返回索引操作后的新pandas对象
-            - 示例: lambda x: x.iloc[:, :3] 或 lambda x: x[['col1', 'col2']]
-            
+            - 示例: lambda x: x.iloc[:, :2] (选择前两列)
+             
     Returns:
         tp.Optional[tp.Series]: 索引操作后的新mapper，如果操作失败则返回None
             - 新mapper的索引对应索引后数据的列名或行名
             - 新mapper的值保持原有的参数映射关系
             - 维护原mapper的名称属性
-            
+             
     Raises:
         AssertionError: 当输入参数类型不符合要求时抛出
             - mapper不是pandas.Series类型
             - ref_obj不是pandas.Series或pandas.DataFrame类型
             
-    使用场景:
-        - ParamLoc参数索引操作中的映射器同步更新
-        - 数据重构过程中保持参数一致性
-        - 批量操作中自动维护映射关系
-        - 动态数据筛选时的参数追踪
         
     实际应用示例:
-        # 技术指标窗口期映射的维护
-        import pandas as pd
-        import numpy as np
-        
-        # 原始数据: 不同窗口期的移动平均线
         data = pd.DataFrame({
             'MA_5': [100, 101, 102],
             'MA_10': [99, 100, 101], 
             'MA_20': [98, 99, 100]
         })
-        
-        # 窗口期映射器
+
         window_mapper = pd.Series([5, 10, 20], 
                                 index=['MA_5', 'MA_10', 'MA_20'], 
                                 name='window')
         
-        # 定义索引操作: 选择前两列
         def select_first_two(obj):
             return obj.iloc[:, :2]
         
-        # 同步更新映射器
-        new_data = select_first_two(data)  
-        # 结果: DataFrame with columns ['MA_5', 'MA_10']
-        
         new_mapper = indexing_on_mapper(window_mapper, data, select_first_two)
         # 结果: Series([5, 10], index=['MA_5', 'MA_10'], name='window')
-        
-        # 验证映射关系保持一致
-        assert new_mapper['MA_5'] == 5
-        assert new_mapper['MA_10'] == 10
-        assert 'MA_20' not in new_mapper.index  # 被正确移除
     """
-    # 输入参数类型验证: 确保mapper是pandas Series类型
-    # 这是函数正常工作的基础前提，Series提供了索引和值的映射关系
     checks.assert_instance_of(mapper, pd.Series)
-    
-    # 输入参数类型验证: 确保ref_obj是pandas Series或DataFrame类型  
-    # ref_obj作为广播模板，必须具有明确的形状和索引结构
     checks.assert_instance_of(ref_obj, (pd.Series, pd.DataFrame))
 
-    # 创建位置追踪数组: 生成mapper索引位置的整数序列(0,1,2,...)
-    # 然后广播到ref_obj的形状，建立位置映射关系
-    # 这样每个ref_obj的位置都对应一个mapper中的索引位置
+    # DataFrame([[0, 1, 2], [0, 1, 2], [0, 1, 2]]) with columns ['MA_5', 'MA_10', 'MA_20']
     df_range_mapper = reshape_fns.broadcast_to(np.arange(len(mapper.index)), ref_obj)
     
-    # 对位置追踪数组执行相同的索引操作
-    # 这一步关键在于模拟原数据的索引过程，记录哪些位置被保留
-    # loced_range_mapper记录了索引操作后保留的原始位置信息
+    # DataFrame([[0, 1], [0, 1], [0, 1]]) with columns ['MA_5', 'MA_10']
     loced_range_mapper = pd_indexing_func(df_range_mapper)
     
-    # 根据保留的位置信息重建新的映射器
-    # loced_range_mapper.values[0]包含了被保留的原始索引位置
-    # 使用iloc根据这些位置从原mapper中提取对应的映射关系
+    # new_mapper = Series([5, 10], index=['MA_5', 'MA_10'], name='window')
     new_mapper = mapper.iloc[loced_range_mapper.values[0]]
     
-    # 根据索引操作结果的类型构建相应的新映射器
-    # 情况1: 结果是DataFrame - 返回以列名为索引的Series
     if checks.is_frame(loced_range_mapper):
-        # 创建新Series: 值来自重建的mapper，索引来自操作后的列名，保持原名称
         return pd.Series(new_mapper.values, index=loced_range_mapper.columns, name=mapper.name)
-    # 情况2: 结果是Series - 返回单元素Series  
     elif checks.is_series(loced_range_mapper):
-        # 创建新Series: 值为单个映射值的列表，索引为Series名称，保持原名称
         return pd.Series([new_mapper], index=[loced_range_mapper.name], name=mapper.name)
     
-    # 情况3: 结果既不是DataFrame也不是Series - 返回None表示操作失败
-    # 这种情况通常表示索引操作返回了标量值或其他不支持的类型
     return None
 
 
 def build_param_indexer(param_names: tp.Sequence[str], class_name: str = 'ParamIndexer',
                         module_name: tp.Optional[str] = None) -> tp.Type[IndexingBase]:
-    """参数索引器工厂函数
-    
-    这是vectorbt索引系统的高级功能，用于动态生成具有参数索引能力的类。
-    该工厂函数为量化分析中的复杂参数化查询提供了强大而灵活的解决方案。
-    
-    设计理念：
-    在量化分析中，经常需要处理具有多个参数维度的数据，比如：
-    - 不同时间窗口的移动平均线
-    - 不同参数组合的策略回测结果  
-    - 不同风险水平的投资组合指标
-    
-    传统的列标签查询方式不够直观，特别是在pandas多级索引的特定级别查询时。
-    该工厂函数通过动态生成类，为每个参数提供专门的索引器，使查询更加直观和便捷。
-    
-    Args:
-        param_names: 参数名称序列，每个名称将生成对应的参数索引器属性
-                    例如：['window', 'strategy', 'risk_level']
-        class_name: 生成的类名称，默认为'ParamIndexer'
-        module_name: 类所属的模块名称，用于设置__module__属性
-        
-    Returns:
-        tp.Type[IndexingBase]: 动态生成的参数索引器类
-        
-    生成的类特性：
-    1. 继承自IndexingBase，具备完整的索引基础设施
-    2. 为每个参数名生成对应的*_loc属性（如window_loc、strategy_loc）
-    3. 每个*_loc属性都是ParamLoc实例，支持参数化查询
-    4. 支持级别名称管理，可自动删除冗余的索引级别
-    
-    使用模式：
-        ```python
-        # 1. 创建参数索引器类
-        MyIndexer = build_param_indexer(['window', 'strategy'])
-        
-        # 2. 继承并实现具体的索引逻辑
-        class BacktestResults(MyIndexer):
-            def __init__(self, returns_df, window_mapper, strategy_mapper):
-                self.returns = returns_df
-                super().__init__([window_mapper, strategy_mapper])
-                
-            def indexing_func(self, pd_indexing_func):
-                return BacktestResults(
-                    pd_indexing_func(self.returns),
-                    indexing_on_mapper(self._window_mapper, self.returns, pd_indexing_func),
-                    indexing_on_mapper(self._strategy_mapper, self.returns, pd_indexing_func)
-                )
-        
-        # 3. 使用参数化查询
-        results = BacktestResults(data, window_map, strategy_map)
-        short_term = results.window_loc[10]  # 选择10日窗口的数据
-        momentum = results.strategy_loc['momentum']  # 选择动量策略的数据
-        combined = results.window_loc[20].strategy_loc['mean_reversion']  # 链式查询
-        ```
-    
-    技术实现：
-    - 使用type()动态创建类，确保类型安全
-    - 通过property装饰器动态生成属性
-    - 利用闭包保持参数名称的正确绑定
-    - 支持方法链式调用，保持pandas风格的使用体验
-    
-    应用场景：
-    - 策略回测结果的参数化分析
-    - 技术指标的参数敏感性研究
-    - 投资组合优化的参数空间探索
-    - 因子分析的多维度查询
-    """
-
     class ParamIndexer(IndexingBase):
-        """动态生成的参数索引器基类
-        
-        这个类在运行时被动态创建，为每个指定的参数提供专门的索引器。
-        该类的实例需要提供参数映射器序列，用于建立数据列与参数值的对应关系。
-        """
 
         def __init__(self, param_mappers: tp.Sequence[tp.Series],
                      level_names: tp.Optional[tp.LevelSequence] = None, **kwargs) -> None:
@@ -485,70 +363,33 @@ def build_param_indexer(param_names: tp.Sequence[str], class_name: str = 'ParamI
                 level_names: 级别名称序列，用于指定每个参数对应的索引级别名称
                             如果提供，长度必须与param_names相同
                 **kwargs: 传递给ParamLoc的额外关键字参数
-                
-            Raises:
-                AssertionError: 当param_mappers长度与param_names不匹配时抛出
             """
-            # 验证参数映射器数量与参数名称数量匹配
             checks.assert_len_equal(param_names, param_mappers)
-
             # 为每个参数创建对应的ParamLoc索引器
             for i, param_name in enumerate(param_names):
-                # 获取对应的级别名称（如果提供）
                 level_name = level_names[i] if level_names is not None else None
-                
-                # 创建ParamLoc实例，绑定到当前实例的indexing_func方法
                 _param_loc = ParamLoc(param_mappers[i], self.indexing_func, level_name=level_name, **kwargs)
-                
                 # 将ParamLoc实例设置为私有属性，命名格式为_{param_name}_loc
                 setattr(self, f'_{param_name}_loc', _param_loc)
 
-    # 为每个参数名动态创建对应的属性
     for i, param_name in enumerate(param_names):
         
         def param_loc(self, _param_name=param_name) -> ParamLoc:
-            """参数位置索引器属性
-            
-            这是动态生成的属性方法，为每个参数提供专门的索引器。
-            
-            Returns:
-                ParamLoc: 对应参数的位置索引器
-                
-            注意:
-                这个方法使用闭包捕获参数名称，确保每个属性返回正确的索引器。
-            """
             return getattr(self, f'_{_param_name}_loc')
 
         # 为属性方法设置文档字符串
-        param_loc.__doc__ = f"""通过参数 `{param_name}` 访问数据组的位置索引器
+        param_loc.__doc__ = f"""Access a group of columns by parameter `{param_name}` using `pd.Series.loc`.
         
-        该属性提供了基于参数值的数据查询功能，支持单值选择、多值选择、范围切片等操作。
-        索引操作会被转发到每个Series/DataFrame，并返回新的类实例。
-        
-        返回:
-            ParamLoc: 参数 `{param_name}` 的位置索引器
-            
-        使用示例:
-            # 选择单个参数值
-            result = obj.{param_name}_loc['param_value']
-            
-            # 选择多个参数值  
-            result = obj.{param_name}_loc[['value1', 'value2']]
-            
-            # 范围选择
-            result = obj.{param_name}_loc['start':'end']
-            
-            # 链式操作
-            result = obj.{param_name}_loc['value'].other_param_loc['other_value']
+        Forwards this operation to each Series/DataFrame and returns a new class instance.
         """
 
         # 将方法设置为类的属性（使用property装饰器）
         setattr(ParamIndexer, param_name + '_loc', property(param_loc))
 
     # 设置动态生成类的元信息
-    ParamIndexer.__name__ = class_name  # 设置类名
-    ParamIndexer.__qualname__ = class_name  # 设置限定名称
+    ParamIndexer.__name__ = class_name  
+    ParamIndexer.__qualname__ = class_name  
     if module_name is not None:
-        ParamIndexer.__module__ = module_name  # 设置模块名称
+        ParamIndexer.__module__ = module_name  
 
     return ParamIndexer

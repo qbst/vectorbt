@@ -2,47 +2,23 @@
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
 """
-================================================================================
-VECTORBT BASE MODULE: INDEXING SYSTEM
-================================================================================
+1. 为所有持有pandas对象的自定义类提供一致的索引操作方式，包括iloc、loc、xs等标准pandas索引方法，
+   确保可以像操作单个DataFrame一样操作复杂的组合对象。
 
-文件设计逻辑与作用概述：
-本文件是vectorbt库中索引系统的核心实现，为量化交易分析中复杂的数据结构提供了类似pandas的
-索引功能。在vectorbt的架构中，用户经常需要处理包含多个pandas对象（DataFrame、Series）
-的复杂类，这些对象可能代表不同的交易策略、时间序列数据、投资组合指标等。
+2. 通过索引转发机制，将对复杂类的索引操作转换为对其内部所有pandas对象的相同索引操作，
+   然后重新构造新的类实例，实现了数据结构的不可变性和操作的一致性。
 
-核心设计理念：
-1. **统一索引接口**：为所有持有pandas对象的自定义类提供一致的索引操作方式，包括iloc、loc、
-   xs等标准pandas索引方法，确保用户可以像操作单个DataFrame一样操作复杂的组合对象。
+3. 提供了强大的参数化索引功能（ParamLoc），允许用户通过参数值而非列标签来查询数据。
 
-2. **转发机制**：通过索引转发机制，将对复杂类的索引操作转换为对其内部所有pandas对象的
-   相同索引操作，然后重新构造新的类实例，实现了数据结构的不可变性和操作的一致性。
-
-3. **参数化索引**：提供了强大的参数化索引功能（ParamLoc），允许用户通过参数值而非列标签
-   来查询数据，这在量化分析中特别有用，比如按策略参数、时间窗口参数等进行数据筛选。
-
-4. **动态类生成**：通过build_param_indexer工厂函数，可以动态生成具有特定参数索引能力的
-   类，为不同类型的量化分析场景提供定制化的索引解决方案。
-
-主要应用场景：
-- **策略回测结果分析**：对包含多个策略、多个时间周期的回测结果进行统一索引操作
-- **投资组合管理**：对包含多个资产、多个指标的投资组合数据进行灵活查询和筛选  
-- **风险分析**：对包含多维度风险指标的复杂数据结构进行参数化查询
-- **因子分析**：按因子类型、计算参数等对多层次因子数据进行索引操作
-
-技术特色：
-- 完全兼容pandas索引语法，无需学习新的API
-- 支持链式索引操作，保持pandas的使用习惯
-- 提供参数映射功能，支持更灵活的数据查询方式
-- 通过抽象基类设计，便于扩展和定制
+4. 通过build_param_indexer工厂函数，可以动态生成具有特定参数索引能力的类。
 """
 
-import numpy as np  # 导入NumPy库，用于数值计算和数组操作
-import pandas as pd  # 导入Pandas库，提供数据结构和数据分析工具
+import numpy as np  
+import pandas as pd  
 
-from vectorbt import _typing as tp  # 导入vectorbt类型定义模块，提供类型注解支持
-from vectorbt.base import index_fns, reshape_fns  # 导入索引函数和重构函数模块
-from vectorbt.utils import checks  # 导入检查工具模块，提供数据验证功能
+from vectorbt import _typing as tp  
+from vectorbt.base import index_fns, reshape_fns  
+from vectorbt.utils import checks  
 
 
 class IndexingError(Exception):
@@ -50,11 +26,6 @@ class IndexingError(Exception):
     
     当索引操作过程中发生错误时抛出的异常。
     继承自Python标准异常类Exception，用于标识vectorbt索引系统中的特定错误。
-    
-    使用场景：
-    - 索引参数不合法时
-    - 索引操作失败时  
-    - 索引转发过程中出现错误时
     """
     pass
 
@@ -65,21 +36,12 @@ IndexingBaseT = tp.TypeVar("IndexingBaseT", bound="IndexingBase")
 
 
 class IndexingBase:
-    """索引操作基类
-    
-    这是vectorbt索引系统的核心抽象基类，为所有需要支持pandas风格索引操作的类
-    提供了基础接口。该类通过indexing_func方法定义了索引操作的统一接口。
-    
-    设计模式：
-    - 采用模板方法模式，定义了索引操作的统一接口
-    - 子类需要实现indexing_func方法来提供具体的索引逻辑
-    - 支持方法链式调用，保持pandas的使用习惯
-    
-    继承指南：
+    """
+    为所有需要支持pandas风格索引操作的类提供了基础接口。
     子类需要重写indexing_func方法，该方法应该：
-    1. 接收一个pandas索引函数作为参数
-    2. 将该函数应用到所有相关的pandas对象上
-    3. 使用索引后的pandas对象构造并返回新的类实例
+        1. 接收一个pandas索引函数作为参数 pd_indexing_func
+        2. 将该函数应用到所有相关的pandas对象上
+        3. 使用索引后的pandas对象构造并返回新的类实例
     """
 
     def indexing_func(self: IndexingBaseT, pd_indexing_func: tp.Callable, **kwargs) -> IndexingBaseT:
@@ -115,63 +77,19 @@ class IndexingBase:
 
 
 class LocBase:
-    """位置索引基类
-    
-    这是实现基于位置的索引操作的基础类，为iloc和loc等索引器提供了统一的基础设施。
-    该类封装了索引函数和相关参数，为具体的索引操作提供了基础框架。
-    
-    核心功能：
-    - 存储索引函数引用，支持延迟执行
-    - 管理索引操作的关键字参数
-    - 提供__getitem__接口的抽象定义
-    
-    设计思想：
-    采用策略模式，将索引函数作为策略对象存储，在实际需要时才执行索引操作。
-    这样的设计使得索引操作可以被延迟执行，提高了灵活性。
-    """
-
     def __init__(self, indexing_func: tp.Callable, **kwargs) -> None:
-        """初始化位置索引基类
-        
-        Args:
-            indexing_func: 索引函数，通常是某个IndexingBase实例的indexing_func方法
-            **kwargs: 传递给索引函数的关键字参数
-        """
-        self._indexing_func = indexing_func  # 存储索引函数引用
-        self._indexing_kwargs = kwargs  # 存储索引操作的关键字参数
+        self._indexing_func = indexing_func  
+        self._indexing_kwargs = kwargs  
 
     @property
     def indexing_func(self) -> tp.Callable:
-        """获取索引函数
-        
-        Returns:
-            tp.Callable: 存储的索引函数
-        """
         return self._indexing_func
 
     @property
     def indexing_kwargs(self) -> dict:
-        """获取索引关键字参数
-        
-        Returns:
-            dict: 传递给索引函数的关键字参数字典
-        """
         return self._indexing_kwargs
 
     def __getitem__(self, key: tp.Any) -> tp.Any:
-        """索引访问接口
-        
-        这是一个抽象方法，子类必须实现具体的索引逻辑。
-        
-        Args:
-            key: 索引键，可以是切片、列表、标量等任意类型
-            
-        Returns:
-            tp.Any: 索引操作的结果
-            
-        Raises:
-            NotImplementedError: 基类中未实现，子类必须重写
-        """
         raise NotImplementedError
 
 
@@ -180,92 +98,14 @@ class iLoc(LocBase):
     
     实现类似pandas.DataFrame.iloc的整数位置索引功能。
     该类将iloc索引操作转发到每个Series/DataFrame对象上，并返回新的类实例。
-    
-    功能特点：
-    - 支持所有pandas.iloc支持的索引方式（切片、列表、标量等）
-    - 保持与pandas.iloc完全一致的行为和语法
-    - 通过索引转发机制实现对复杂对象的统一索引
-    
-    使用场景：
-    当需要按整数位置对包含多个pandas对象的复杂类进行索引时使用，
-    比如选择前N行数据、按位置范围切片等。
     """
 
     def __getitem__(self, key: tp.Any) -> tp.Any:
-        """执行整数位置索引
-        
-        将iloc索引操作应用到所有相关的pandas对象上。
-        
-        Args:
-            key: 索引键，支持pandas.iloc支持的所有格式：
-                - 整数：如 5（选择第5行）
-                - 切片：如 1:5（选择第1到4行）  
-                - 列表：如 [1,3,5]（选择指定位置的行）
-                - 元组：如 (1:5, ['col1','col2'])（行列同时索引）
-                
-        Returns:
-            tp.Any: 索引操作后的新对象实例
-            
-        示例:
-            ```python
-            # 选择前3行
-            result = obj.iloc[:3]
-            
-            # 选择特定位置的行
-            result = obj.iloc[[0, 2, 4]]
-            
-            # 同时索引行和列
-            result = obj.iloc[1:5, 2:7]
-            ```
-        """
         return self.indexing_func(lambda x: x.iloc.__getitem__(key), **self.indexing_kwargs)
 
 
 class Loc(LocBase):
-    """标签位置索引器
-    
-    实现类似pandas.DataFrame.loc的标签位置索引功能。
-    该类将loc索引操作转发到每个Series/DataFrame对象上，并返回新的类实例。
-    
-    功能特点：
-    - 支持所有pandas.loc支持的索引方式（标签、切片、布尔索引等）
-    - 保持与pandas.loc完全一致的行为和语法
-    - 支持多级索引的复杂查询操作
-    - 支持条件筛选和布尔索引
-    
-    使用场景：
-    当需要按标签对包含多个pandas对象的复杂类进行索引时使用，
-    比如按时间范围筛选、按股票代码查询、按条件过滤等。
-    """
-
     def __getitem__(self, key: tp.Any) -> tp.Any:
-        """执行标签位置索引
-        
-        将loc索引操作应用到所有相关的pandas对象上。
-        
-        Args:
-            key: 索引键，支持pandas.loc支持的所有格式：
-                - 标签：如 'AAPL'（选择指定标签的行）
-                - 切片：如 '2020-01-01':'2020-12-31'（日期范围切片）
-                - 列表：如 ['AAPL','MSFT']（选择多个标签）
-                - 布尔数组：如条件筛选
-                - 元组：如 ('2020-01-01', 'AAPL')（多级索引）
-                
-        Returns:
-            tp.Any: 索引操作后的新对象实例
-            
-        示例:
-            ```python
-            # 按日期范围选择
-            result = obj.loc['2020-01-01':'2020-12-31']
-            
-            # 按标签选择
-            result = obj.loc[['AAPL', 'MSFT']]
-            
-            # 条件筛选
-            result = obj.loc[obj.returns > 0.05]
-            ```
-        """
         return self.indexing_func(lambda x: x.loc.__getitem__(key), **self.indexing_kwargs)
 
 
@@ -274,24 +114,15 @@ PandasIndexerT = tp.TypeVar("PandasIndexerT", bound="PandasIndexer")
 
 
 class PandasIndexer(IndexingBase):
-    """Pandas风格索引器
-    
-    这是vectorbt索引系统的核心实现类，提供了完整的pandas风格索引功能。
+    """
+    提供了完整的pandas风格索引功能。
     该类实现了iloc、loc、xs和__getitem__等索引方法，使得自定义类可以像pandas对象一样进行索引操作。
     
-    核心特性：
-    1. **完整的pandas索引支持**：支持iloc、loc、xs等所有主要的pandas索引方法
-    2. **索引转发机制**：自动将索引操作转发到所有内部pandas对象
-    3. **类型安全**：通过泛型确保索引操作返回正确的类型
-    4. **灵活的参数传递**：支持将额外参数传递给索引操作
-    
-    使用方式：
-    该类通常作为基类被继承，子类需要实现indexing_func方法来定义具体的索引逻辑。
-    
-    设计模式：
-    - 装饰器模式：为现有类添加索引功能
-    - 代理模式：代理对内部pandas对象的索引操作
-    - 模板方法模式：定义索引操作的统一模板
+    继承该类时，实现indexing_func方法（IndexingBase），该方法接收 pd_indexing_func: tp.Callable 来操作子类中的 pandas 属性
+        .iloc[key]——>._iloc.__getitem__(key)——>indexing_func(lambda x: x.iloc.__getitem__(key))
+        .loc[key]——>._loc.__getitem__(key)——>indexing_func(lambda x: x.loc.__getitem__(key))
+        .xs(*args, **kwargs)——>indexing_func(lambda x: x.xs(*args, **kwargs))
+        [key]——>.__getitem__(key)——>indexing_func(lambda x: x.__getitem__(key))
     
     示例:
         ```python
@@ -309,8 +140,7 @@ class PandasIndexer(IndexingBase):
         
         portfolio = Portfolio(returns_df, positions_df)
         # 现在可以像操作DataFrame一样操作Portfolio
-        recent_data = portfolio.iloc[-30:]  # 最近30天的数据
-        apple_data = portfolio.loc[:, 'AAPL']  # 苹果股票的数据
+        recent_data = portfolio.iloc[-30:]
         ```
     """
 
@@ -321,43 +151,16 @@ class PandasIndexer(IndexingBase):
             **kwargs: 传递给索引操作的关键字参数，这些参数会被保存并
                      在每次索引操作时传递给indexing_func方法
         """
-        # 创建iloc索引器，绑定到当前实例的indexing_func方法
         self._iloc = iLoc(self.indexing_func, **kwargs)
-        # 创建loc索引器，绑定到当前实例的indexing_func方法  
         self._loc = Loc(self.indexing_func, **kwargs)
-        # 保存索引关键字参数，供其他索引方法使用
         self._indexing_kwargs = kwargs
 
     @property
     def indexing_kwargs(self) -> dict:
-        """获取索引关键字参数
-        
-        Returns:
-            dict: 传递给索引操作的关键字参数字典
-        """
         return self._indexing_kwargs
 
     @property
     def iloc(self) -> iLoc:
-        """整数位置索引器属性
-        
-        提供基于整数位置的索引功能，完全兼容pandas.DataFrame.iloc的API。
-        
-        Returns:
-            iLoc: 整数位置索引器实例
-            
-        使用示例:
-            ```python
-            # 选择前10行
-            obj.iloc[:10]
-            
-            # 选择特定行和列
-            obj.iloc[5:15, 2:8]
-            
-            # 选择不连续的行
-            obj.iloc[[1, 5, 10, 15]]
-            ```
-        """
         return self._iloc
 
     # 复制iLoc类的文档字符串到iloc属性
@@ -365,125 +168,25 @@ class PandasIndexer(IndexingBase):
 
     @property
     def loc(self) -> Loc:
-        """标签位置索引器属性
-        
-        提供基于标签的索引功能，完全兼容pandas.DataFrame.loc的API。
-        
-        Returns:
-            Loc: 标签位置索引器实例
-            
-        使用示例:
-            ```python
-            # 按日期范围选择
-            obj.loc['2020-01-01':'2020-12-31']
-            
-            # 按标签选择列
-            obj.loc[:, ['returns', 'volume']]
-            
-            # 条件筛选
-            obj.loc[obj.price > 100]
-            ```
-        """
         return self._loc
 
-    # 复制Loc类的文档字符串到loc属性
     loc.__doc__ = Loc.__doc__
 
     def xs(self: PandasIndexerT, *args, **kwargs) -> PandasIndexerT:
-        """横截面索引操作
-        
-        转发pandas.DataFrame.xs操作到每个Series/DataFrame，并返回新的类实例。
-        xs方法主要用于从多级索引的DataFrame中提取横截面数据。
-        
-        Args:
-            *args: 传递给pandas.xs的位置参数
-                - key: 要选择的标签或标签元组
-                - axis: 轴向，0表示索引，1表示列
-                - level: 要选择的索引级别
-                - drop_level: 是否删除选择的级别
-            **kwargs: 传递给pandas.xs的关键字参数
-            
-        Returns:
-            PandasIndexerT: 横截面索引后的新实例
-            
-        使用场景:
-            - 从多级索引中选择特定级别的数据
-            - 获取特定时间点或标签的横截面数据
-            - 在多维数据分析中提取切片
-            
-        示例:
-            ```python
-            # 从多级索引中选择特定日期的数据
-            daily_data = obj.xs('2020-01-01', level='date')
-            
-            # 选择特定资产的所有数据
-            asset_data = obj.xs('AAPL', level='symbol', axis=1)
-            ```
-        """
         return self.indexing_func(lambda x: x.xs(*args, **kwargs), **self.indexing_kwargs)
 
     def __getitem__(self: PandasIndexerT, key: tp.Any) -> PandasIndexerT:
-        """索引访问操作
-        
-        实现Python的索引语法支持，如obj[key]。
-        该方法将__getitem__操作转发到每个内部pandas对象上。
-        
-        Args:
-            key: 索引键，可以是：
-                - 字符串：列名或索引标签
-                - 列表：多个列名或标签
-                - 切片：范围选择
-                - 布尔数组：条件筛选
-                - 元组：多维索引
-                
-        Returns:
-            PandasIndexerT: 索引操作后的新实例
-            
-        注意:
-            这个方法提供了最灵活的索引方式，但具体行为取决于pandas对象的类型和索引键的类型。
-            
-        示例:
-            ```python
-            # 选择单个列
-            returns = obj['returns']
-            
-            # 选择多个列
-            subset = obj[['returns', 'volume', 'price']]
-            
-            # 条件筛选
-            positive_returns = obj[obj['returns'] > 0]
-            
-            # 切片选择
-            recent = obj[-30:]  # 最近30个观测值
-            ```
-        """
         return self.indexing_func(lambda x: x.__getitem__(key), **self.indexing_kwargs)
 
 
 class ParamLoc(LocBase):
     """参数位置索引器
     
-    这是vectorbt索引系统的高级功能，允许通过参数值而非直接的列标签来访问数据组。
-    在量化分析中，经常需要按策略参数、计算窗口、风险阈值等参数来筛选数据，
-    ParamLoc正是为了解决这类需求而设计的。
-    
-    核心功能：
-    1. **参数映射**：通过mapper Series建立列标签与参数值的映射关系
-    2. **类型转换**：自动处理对象类型参数的字符串转换
-    3. **级别管理**：支持多级索引中的级别删除操作
-    4. **灵活查询**：支持单值、多值、切片等多种查询方式
-    
-    技术特点：
-    - 使用pandas的loc机制实现高效查询
-    - 支持对象类型参数的自动字符串化处理
-    - 与多级索引无缝集成
-    - 提供直观的参数化查询接口
-    
-    应用场景：
-    - 按策略参数筛选回测结果
-    - 按计算窗口选择技术指标
-    - 按风险水平过滤投资组合
-    - 按因子类型查询因子数据
+    该类 ParamLoc 的实例 x 作为某个类 A 的属性时，传入一个函数给 self._indexing_func
+        这个函数接收一个函数作为参数，并且应当使用接收的这个函数去处理类 A 的其它 DataFrame 属性
+    假设类 A 的某实例 *：*.x[key]——>*.x.__getitem__(key)
+        获取 key 在 x._mapper.values 上对应的整数索引数组
+        然后返回 self._indexing_func(pd_indexing_func)，其中 pd_indexing_func 从参数 obj 中选择 indices 列并删除 x.level_name列，并返回新的 obj
     """
 
     def __init__(self, mapper: tp.Series, indexing_func: tp.Callable, level_name: tp.Level = None, **kwargs) -> None:
@@ -499,10 +202,8 @@ class ParamLoc(LocBase):
         Raises:
             AssertionError: 当mapper不是pandas.Series类型时抛出
         """
-        # 验证mapper必须是pandas Series类型
         checks.assert_instance_of(mapper, pd.Series)
 
-        # 处理对象类型的参数值
         if mapper.dtype == 'O':  # 'O'表示object类型
             # 如果参数是对象类型，必须先转换为字符串类型
             # 原始mapper不会被修改，这里创建副本进行转换
@@ -511,46 +212,18 @@ class ParamLoc(LocBase):
         self._mapper = mapper  # 存储参数映射关系
         self._level_name = level_name  # 存储级别名称
 
-        # 调用父类初始化方法
         LocBase.__init__(self, indexing_func, **kwargs)
 
     @property
     def mapper(self) -> tp.Series:
-        """获取参数映射器
-        
-        Returns:
-            tp.Series: 存储的参数映射Series，索引为列标签，值为参数值
-        """
         return self._mapper
 
     @property
     def level_name(self) -> tp.Level:
-        """获取级别名称
-        
-        Returns:
-            tp.Level: 用于级别删除操作的级别名称
-        """
         return self._level_name
 
     def get_indices(self, key: tp.Any) -> tp.Array1d:
-        """根据参数键获取对应的列索引数组
-        
-        这是ParamLoc的核心方法，将参数值转换为实际的列索引位置。
-        
-        Args:
-            key: 参数键，可以是：
-                - 单个参数值：如 'param1'
-                - 参数值列表：如 ['param1', 'param2']  
-                - 切片对象：如 slice('param1', 'param3')
-                - NumPy数组：参数值数组
-                
-        Returns:
-            tp.Array1d: 对应的列索引位置数组
-            
-        处理逻辑：
-        1. 如果mapper是对象类型，则将key也转换为字符串
-        2. 使用pandas的loc机制在mapper的值上进行索引
-        3. 返回匹配的列位置索引
+        """获取key在mapper.values上对应的整数索引数组
         
         示例:
             假设有mapper = pd.Series(['A', 'A', 'B'], index=[0, 1, 2])
@@ -566,47 +239,25 @@ class ParamLoc(LocBase):
                 stop = str(key.stop) if key.stop is not None else None
                 key = slice(start, stop, key.step)
             elif isinstance(key, (list, np.ndarray)):
-                # 处理列表和数组，将每个元素转换为字符串
                 key = list(map(str, key))
             else:
-                # 处理其他类型（元组、对象等），直接转换为字符串
                 key = str(key)
                 
-        # 创建一个从参数值到列位置的映射
-        # mapper.values是参数值，mapper.index是原始列标签
-        # 这里创建一个Series，索引是参数值，值是列位置（0到len-1）
         mapper = pd.Series(np.arange(len(self.mapper.index)), index=self.mapper.values)
         
-        # 使用pandas的loc机制根据参数值获取列位置
         indices = mapper.loc.__getitem__(key)
         
-        # 如果结果是Series，提取其values作为NumPy数组
         if isinstance(indices, pd.Series):
             indices = indices.values
             
         return indices
 
     def __getitem__(self, key: tp.Any) -> tp.Any:
-        """参数索引访问操作
-        
-        实现通过参数值进行数据访问的核心逻辑。
-        
-        Args:
-            key: 参数键，支持多种格式的参数值查询
-            
-        Returns:
-            tp.Any: 索引操作后的结果对象
-            
-        处理流程：
-        1. 通过get_indices方法将参数值转换为列索引
-        2. 判断是否为多选操作（影响级别删除逻辑）
-        3. 定义pandas索引函数，使用iloc进行实际索引
-        4. 根据需要删除多级索引中的指定级别
-        5. 通过indexing_func执行索引操作并返回结果
-        
-        级别删除逻辑：
-        当选择单个参数且指定了level_name时，会自动删除该级别以保持数据结构的简洁性。
-        这在处理多级索引的列时特别有用。
+        """
+        [key]——>__getitem__(key)：
+            获取key在self._mapper.values上对应的整数索引数组
+            定义一个函数，从参数 obj 中选择 indices 列并删除self.level_name列，并返回新的 obj
+            然后返回 self.indexing_func(pd_indexing_func, **self.indexing_kwargs)
         """
         # 获取参数对应的列索引位置
         indices = self.get_indices(key)
@@ -615,26 +266,12 @@ class ParamLoc(LocBase):
         is_multiple = isinstance(key, (slice, list, np.ndarray))
 
         def pd_indexing_func(obj: tp.SeriesFrame) -> tp.MaybeSeriesFrame:
-            """pandas索引函数
-            
-            这是传递给indexing_func的实际索引操作函数。
-            
-            Args:
-                obj: 要进行索引的pandas对象（Series或DataFrame）
-                
-            Returns:
-                tp.MaybeSeriesFrame: 索引后的pandas对象
-            """
-            # 使用iloc根据列位置进行索引
             new_obj = obj.iloc[:, indices]
-            
-            # 如果只选择了一个参数且指定了级别名称，则删除该级别
+            # 如果只选择了一个参数且指定了级别名称且为DataFrame且具有多级索引列，则删除该级别
             if not is_multiple:
                 if self.level_name is not None:
-                    # 检查是否为DataFrame且具有多级索引列
                     if checks.is_frame(new_obj):
                         if isinstance(new_obj.columns, pd.MultiIndex):
-                            # 删除指定的级别以简化索引结构
                             new_obj.columns = index_fns.drop_levels(new_obj.columns, self.level_name)
                             
             return new_obj
@@ -645,70 +282,120 @@ class ParamLoc(LocBase):
 
 def indexing_on_mapper(mapper: tp.Series, ref_obj: tp.SeriesFrame,
                        pd_indexing_func: tp.Callable) -> tp.Optional[tp.Series]:
-    """在映射器上执行索引操作
+    """在映射器上执行索引操作并同步维护参数映射关系
     
-    这是一个工具函数，用于将mapper Series广播到参考对象的维度，然后执行pandas索引操作。
-    该函数主要用于参数索引系统中，确保参数映射关系在索引操作后得到正确维护。
+    这是一个核心工具函数，用于在对pandas对象执行索引操作时，自动同步更新相应的参数映射器。
+    该函数确保在数据筛选、重排、切片等操作后，参数映射关系始终保持与数据结构的一致性。
     
-    工作原理：
-    1. 将mapper广播到与ref_obj相同的形状
-    2. 对广播后的数据执行索引操作
-    3. 根据索引结果重建mapper的映射关系
-    4. 返回与索引结果对应的新mapper
+    核心机制:
+    1. 通过广播技术将mapper的索引位置追踪到ref_obj的每个位置
+    2. 对追踪数组执行与原数据相同的索引操作
+    3. 根据操作结果重建新的参数映射器
+    4. 返回与索引后数据结构匹配的新mapper
     
     Args:
-        mapper: 参数映射Series，建立列与参数值的对应关系
-        ref_obj: 参考pandas对象，用于确定广播的目标形状
-        pd_indexing_func: pandas索引函数，要应用的索引操作
-        
+        mapper (tp.Series): 参数映射Series，建立列标签与参数值的对应关系
+            - 索引: 原始数据的列名或行名
+            - 值: 对应的参数值（如策略类型、窗口期、风险等级等）
+            - 名称: 映射器的名称，用于标识参数类型
+            示例: pd.Series(['momentum', 'momentum', 'mean_reversion'], 
+                           index=['col1', 'col2', 'col3'], name='strategy_type')
+                           
+        ref_obj (tp.SeriesFrame): 参考pandas对象，用于确定广播的目标形状
+            - 可以是DataFrame或Series
+            - 作为mapper广播的模板，确定结果的维度结构
+            - 通常是即将被索引的主数据对象
+            
+        pd_indexing_func (tp.Callable): pandas索引函数，要应用的具体索引操作
+            - 接受pandas对象作为参数的函数
+            - 返回索引操作后的新pandas对象
+            - 示例: lambda x: x.iloc[:, :3] 或 lambda x: x[['col1', 'col2']]
+            
     Returns:
         tp.Optional[tp.Series]: 索引操作后的新mapper，如果操作失败则返回None
-        
+            - 新mapper的索引对应索引后数据的列名或行名
+            - 新mapper的值保持原有的参数映射关系
+            - 维护原mapper的名称属性
+            
     Raises:
-        AssertionError: 当mapper不是Series或ref_obj不是Series/DataFrame时抛出
+        AssertionError: 当输入参数类型不符合要求时抛出
+            - mapper不是pandas.Series类型
+            - ref_obj不是pandas.Series或pandas.DataFrame类型
+            
+    使用场景:
+        - ParamLoc参数索引操作中的映射器同步更新
+        - 数据重构过程中保持参数一致性
+        - 批量操作中自动维护映射关系
+        - 动态数据筛选时的参数追踪
         
-    使用场景：
-    - 在参数索引操作中维护映射关系
-    - 在数据重构过程中保持参数一致性  
-    - 在批量操作中同步更新映射器
-    
-    示例:
-        ```python
-        # 原始映射：列A->param1, 列B->param2, 列C->param1
-        mapper = pd.Series(['param1', 'param2', 'param1'], 
-                          index=['A', 'B', 'C'], name='strategy')
-        df = pd.DataFrame(data, columns=['A', 'B', 'C'])
+    实际应用示例:
+        # 技术指标窗口期映射的维护
+        import pandas as pd
+        import numpy as np
         
-        # 选择前两列的索引操作
-        indexing_func = lambda x: x.iloc[:, :2]
-        new_mapper = indexing_on_mapper(mapper, df, indexing_func)
-        # 结果：新mapper对应选择后的列A和B
-        ```
+        # 原始数据: 不同窗口期的移动平均线
+        data = pd.DataFrame({
+            'MA_5': [100, 101, 102],
+            'MA_10': [99, 100, 101], 
+            'MA_20': [98, 99, 100]
+        })
+        
+        # 窗口期映射器
+        window_mapper = pd.Series([5, 10, 20], 
+                                index=['MA_5', 'MA_10', 'MA_20'], 
+                                name='window')
+        
+        # 定义索引操作: 选择前两列
+        def select_first_two(obj):
+            return obj.iloc[:, :2]
+        
+        # 同步更新映射器
+        new_data = select_first_two(data)  
+        # 结果: DataFrame with columns ['MA_5', 'MA_10']
+        
+        new_mapper = indexing_on_mapper(window_mapper, data, select_first_two)
+        # 结果: Series([5, 10], index=['MA_5', 'MA_10'], name='window')
+        
+        # 验证映射关系保持一致
+        assert new_mapper['MA_5'] == 5
+        assert new_mapper['MA_10'] == 10
+        assert 'MA_20' not in new_mapper.index  # 被正确移除
     """
-    # 验证输入参数类型
+    # 输入参数类型验证: 确保mapper是pandas Series类型
+    # 这是函数正常工作的基础前提，Series提供了索引和值的映射关系
     checks.assert_instance_of(mapper, pd.Series)
+    
+    # 输入参数类型验证: 确保ref_obj是pandas Series或DataFrame类型  
+    # ref_obj作为广播模板，必须具有明确的形状和索引结构
     checks.assert_instance_of(ref_obj, (pd.Series, pd.DataFrame))
 
-    # 创建范围映射器：将mapper的索引位置（0,1,2,...）广播到ref_obj的形状
-    # 这样可以跟踪每个位置在索引操作后的去向
+    # 创建位置追踪数组: 生成mapper索引位置的整数序列(0,1,2,...)
+    # 然后广播到ref_obj的形状，建立位置映射关系
+    # 这样每个ref_obj的位置都对应一个mapper中的索引位置
     df_range_mapper = reshape_fns.broadcast_to(np.arange(len(mapper.index)), ref_obj)
     
-    # 对范围映射器执行相同的索引操作
+    # 对位置追踪数组执行相同的索引操作
+    # 这一步关键在于模拟原数据的索引过程，记录哪些位置被保留
+    # loced_range_mapper记录了索引操作后保留的原始位置信息
     loced_range_mapper = pd_indexing_func(df_range_mapper)
     
-    # 根据索引操作的结果重建mapper
-    # loced_range_mapper告诉我们哪些原始位置被保留了
+    # 根据保留的位置信息重建新的映射器
+    # loced_range_mapper.values[0]包含了被保留的原始索引位置
+    # 使用iloc根据这些位置从原mapper中提取对应的映射关系
     new_mapper = mapper.iloc[loced_range_mapper.values[0]]
     
-    # 根据索引结果的类型返回相应的新mapper
+    # 根据索引操作结果的类型构建相应的新映射器
+    # 情况1: 结果是DataFrame - 返回以列名为索引的Series
     if checks.is_frame(loced_range_mapper):
-        # 如果结果是DataFrame，返回以列为索引的Series
+        # 创建新Series: 值来自重建的mapper，索引来自操作后的列名，保持原名称
         return pd.Series(new_mapper.values, index=loced_range_mapper.columns, name=mapper.name)
+    # 情况2: 结果是Series - 返回单元素Series  
     elif checks.is_series(loced_range_mapper):
-        # 如果结果是Series，返回单元素Series
+        # 创建新Series: 值为单个映射值的列表，索引为Series名称，保持原名称
         return pd.Series([new_mapper], index=[loced_range_mapper.name], name=mapper.name)
     
-    # 如果结果不是DataFrame或Series，返回None
+    # 情况3: 结果既不是DataFrame也不是Series - 返回None表示操作失败
+    # 这种情况通常表示索引操作返回了标量值或其他不支持的类型
     return None
 
 

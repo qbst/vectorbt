@@ -1053,17 +1053,18 @@ class Configured(Pickleable, Documented):
 
     @property
     def config(self) -> Config:
-        """初始化配置。"""
         return self._config
 
     @property
     def writeable_attrs(self) -> tp.Set[str]:
-        """
-        可写属性集合，这些属性将与配置一起保存/复制。
+        '''
+        可写属性集合。
         
-        返回:
-            可写属性集合
-        """
+        参考 decorators.ipynb
+        第一步：base_cls.writeable_attrs → property.__get__(None, base_cls) → 返回 property 对象本身
+            这是因为，property 的 __get__　由　C　层面实现，不是描述符，直接返回调用结果。
+        第二步：property.__get__(self) → 调用 property.fget(self)
+        '''
         return {
             base_cls.writeable_attrs.__get__(self)
             for base_cls in self.__class__.__bases__

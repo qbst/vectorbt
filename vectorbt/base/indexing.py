@@ -94,15 +94,8 @@ class LocBase:
 
 
 class iLoc(LocBase):
-    """整数位置索引器
-    
-    实现类似pandas.DataFrame.iloc的整数位置索引功能。
-    该类将iloc索引操作转发到每个Series/DataFrame对象上，并返回新的类实例。
-    """
-
     def __getitem__(self, key: tp.Any) -> tp.Any:
         return self.indexing_func(lambda x: x.iloc.__getitem__(key), **self.indexing_kwargs)
-
 
 class Loc(LocBase):
     def __getitem__(self, key: tp.Any) -> tp.Any:
@@ -351,8 +344,8 @@ def indexing_on_mapper(mapper: tp.Series, ref_obj: tp.SeriesFrame,
 
 def build_param_indexer(param_names: tp.Sequence[str], class_name: str = 'ParamIndexer',
                         module_name: tp.Optional[str] = None) -> tp.Type[IndexingBase]:
+    
     class ParamIndexer(IndexingBase):
-
         def __init__(self, param_mappers: tp.Sequence[tp.Series],
                      level_names: tp.Optional[tp.LevelSequence] = None, **kwargs) -> None:
             """初始化参数索引器

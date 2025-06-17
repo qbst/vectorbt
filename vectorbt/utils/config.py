@@ -176,17 +176,6 @@ def convert_to_dict(dct: InConfigLikeT, nested: bool = True) -> dict:
 
 
 def set_dict_item(dct: dict, k: tp.Any, v: tp.Any, force: bool = False) -> None:
-    """
-    设置字典项（比较特殊的是dct为Config类型）。
-    
-    如果字典是Config类型，则传递force关键字以覆盖阻止标志。
-    
-    参数:
-        dct: 要设置的字典
-        k: 键
-        v: 值
-        force: 是否强制设置（忽略只读或冻结状态）
-    """
     if isinstance(dct, Config):
         dct.__setitem__(k, v, force=force)
     else:
@@ -653,18 +642,9 @@ class Config(PickleableDict, Documented):
 
     def __setitem__(self, k: str, v: tp.Any, force: bool = False) -> None:
         """
-        设置字典项。
-        
-        考虑只读和冻结键的限制。
-        
-        参数:
-            k: 键
-            v: 值
-            force: 是否强制设置（忽略只读或冻结状态）
-            
-        异常:
-            TypeError: 当配置为只读时
-            KeyError: 当配置键被冻结且键不存在时
+        (强制 || 该Config非只读) && (强制 || 该Config非冻结键 || 冻结键但是 k 在self.items()中)
+            写入配置项(k, v)到self.items()
+            如果 self.as_attrs_ 为 True，还写入到 self.__dict__
         """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
@@ -718,21 +698,6 @@ class Config(PickleableDict, Documented):
                 del self.__dict__[k]
 
     def pop(self, k: str, v: tp.Any = _RaiseKeyError, force: bool = False) -> tp.Any:
-        """
-        删除并返回指定键的键值对。
-        
-        参数:
-            k: 键
-            v: 如果键不存在时的默认值
-            force: 是否强制操作（忽略只读或冻结状态）
-            
-        返回:
-            键对应的值
-            
-        异常:
-            TypeError: 当配置为只读时
-            KeyError: 当配置键被冻结时
-        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:
@@ -746,19 +711,6 @@ class Config(PickleableDict, Documented):
         return result
 
     def popitem(self, force: bool = False) -> tp.Tuple[tp.Any, tp.Any]:
-        """
-        删除并返回某个键值对。
-        
-        参数:
-            force: 是否强制操作（忽略只读或冻结状态）
-            
-        返回:
-            键值对元组
-            
-        异常:
-            TypeError: 当配置为只读时
-            KeyError: 当配置键被冻结时
-        """
         if not force and self.readonly_:
             raise TypeError("Config is read-only")
         if not force and self.frozen_keys_:

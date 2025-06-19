@@ -1,80 +1,6 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""全局设置模块
-
-本模块定义了vectorbt库的全局配置系统，提供了一个层次化的配置结构，允许用户自定义库的行为。
-配置系统采用嵌套字典的形式，支持针对不同子包、模块和类的个性化设置，并提供了灵活的读取和修改机制。
-所有vectorbt内部组件都会读取这里定义的默认参数来控制其行为，用户可以通过修改这些设置来自定义库的行为而无需修改代码。
-
-`settings`配置也可以通过`vectorbt.settings`访问.
-
-以下是`settings`配置的主要特性:
-
-* 它是一个嵌套配置，即一个由多个子配置组成的配置，
-    每个子包（如'data'）、模块（如'array_wrapper'）甚至类（如'configured'）各有一个。
-    每个子配置可能由其他子配置组成。
-* 它具有冻结的键 - 你不能添加其他子配置或删除现有的子配置，但你可以修改它们。
-* 每个子配置可以通过使用`dict`继承父配置的属性，或者
-    通过使用自己的`vectorbt.utils.config.Config`覆盖它们。定义自己的配置的主要原因是允许
-    添加新的键（例如，'plotting.layout'）。
-
-例如，你可以更改每个图表的默认宽度和高度:
-
-```pycon
->>> import vectorbt as vbt
-
->>> vbt.settings['plotting']['layout']['width'] = 800
->>> vbt.settings['plotting']['layout']['height'] = 400
-```
-    
-主子配置（如绘图）也可以使用点符号访问/修改：
-
-```
->>> vbt.settings.plotting['layout']['width'] = 800
-```
-
-一些子配置也允许使用点符号，但这取决于它们是否继承了根配置的规则。
-
-```plaintext
->>> vbt.settings.data - ok
->>> vbt.settings.data.binance - ok
->>> vbt.settings.data.binance.api_key - error
->>> vbt.settings.data.binance['api_key'] - ok
-```
-
-由于这只在查看源代码时可见，建议始终使用括号符号。
-
-!!! 注意
-    任何更改都会立即生效。但它是否立即反映取决于访问设置的地方。例如，更改'array_wrapper.freq'会立即生效，因为
-    每次调用`vectorbt.base.array_wrapper.ArrayWrapper.freq`时都会解析该值。
-    另一方面，更改'portfolio.fillna_close'只对将来创建的`vectorbt.portfolio.base.Portfolio`
-    实例有效，而不是现有的实例，因为该值是在构造时解析的。
-    但大多数情况下，你仍然可以通过使用
-    `vectorbt.portfolio.base.Portfolio.replace`替换实例来强制更新默认值。
-
-    vectorbt中的所有地方都从`vectorbt._settings.settings`导入`settings`，而不是从`vectorbt`导入。
-    覆盖`vectorbt.settings`只覆盖为用户创建的引用。
-    考虑更新设置配置而不是替换它。
-
-## 保存
-
-像任何其他继承`vectorbt.utils.config.Config`的类一样，我们可以将设置保存到磁盘，
-加载回来，并就地更新：
-
-```pycon
->>> vbt.settings.save('my_settings')
->>> vbt.settings['caching']['enabled'] = False
->>> vbt.settings['caching']['enabled']
-False
-
->>> vbt.settings.load_update('my_settings')  # load() would return a new object!
->>> vbt.settings['caching']['enabled']
-True
-```
-
-附加功能：你可以对`settings`内的任何子配置执行相同的操作！
-"""
 
 # 导入必要的库
 import json  # 用于JSON数据处理
@@ -102,14 +28,87 @@ class SettingsConfig(Config):
     
     该类继承自vectorbt.utils.config.Config，添加了特定于主题和模板管理的方法，
     用于管理vectorbt的全局设置和可视化主题。
+    
+    主要功能:
+    - 管理Plotly可视化主题的注册和切换
+    - 提供模板管理接口，支持动态主题切换
+    - 维护全局配置状态，确保可视化风格的一致性
+    
+    属性:
+        继承Config类的所有属性，额外管理plotting相关的主题配置
+        
+    使用示例:
+        >>> import vectorbt as vbt
+        >>> # 设置暗色主题
+        >>> vbt.settings.set_theme('dark')
+        >>> # 注册自定义主题
+        >>> vbt.settings.register_template('custom_theme')
+        >>> # 重置为默认主题
+        >>> vbt.settings.reset_theme()
     """
 
     def register_template(self, theme: str) -> None:
-        """注册指定主题的模板。
+        """注册指定主题的Plotly模板到全局模板系统中。
+        
+        此方法将从配置中读取指定主题的模板设置，并将其注册到Plotly的全局模板系统中，
+        使得该主题可以在后续的图表绘制中被引用和使用。注册过程包括模板名称的规范化
+        （添加'vbt_'前缀）以及模板对象的创建和注册。
+        
+        功能说明:
+        - 从内部配置读取主题模板定义
+        - 创建Plotly模板对象
+        - 注册到Plotly全局模板系统
+        - 支持vectorbt特有的主题命名规范
+        
+        注册流程:
+        1. 构造标准化的模板名称（vbt_前缀 + 主题名）
+        2. 从配置中提取主题的模板定义
+        3. 创建Plotly Layout Template对象
+        4. 将模板注册到Plotly全局模板注册表
         
         参数:
-            theme: str - 主题名称
+            theme (str): 要注册的主题名称，必须在配置中已定义
+                        支持的主题包括: 'light', 'dark', 'seaborn'
+                        主题名称会自动添加'vbt_'前缀作为最终模板名
+                        例如: 'light' -> 'vbt_light'
+        
+        返回:
+            None: 此方法无返回值，直接修改Plotly全局模板注册表
+        
+        异常:
+            KeyError: 当指定的主题在配置中不存在时抛出
+            ValueError: 当主题配置格式不正确时抛出
+            
+        使用示例:
+            >>> import vectorbt as vbt
+            >>> # 注册亮色主题
+            >>> vbt.settings.register_template('light')
+            >>> # 现在可以在Plotly中使用'vbt_light'模板
+            
+            >>> # 注册暗色主题
+            >>> vbt.settings.register_template('dark') 
+            >>> # 现在可以在Plotly中使用'vbt_dark'模板
+            
+            >>> # 在图表中使用已注册的模板
+            >>> fig = go.Figure()
+            >>> fig.update_layout(template='vbt_dark')
+            
+        注意事项:
+        - 主题必须在self['plotting']['themes']中预先定义
+        - 注册的模板名称遵循'vbt_' + theme的命名规范
+        - 重复注册同名模板会覆盖之前的定义
+        - 此方法会修改Plotly的全局状态
         """
+        # 将指定主题的模板注册到Plotly的全局模板系统中
+        # pio.templates: Plotly IO模块的全局模板注册表，是一个字典结构，存储所有可用的图表模板
+        # 'vbt_' + theme: 构造vectorbt特有的模板名称，添加'vbt_'前缀以避免与其他库的模板名称冲突
+        #                 例如: theme='light' -> 模板名='vbt_light'
+        # go.layout.Template(): 创建Plotly的布局模板对象，用于定义图表的默认样式和布局
+        # self['plotting']['themes'][theme]['template']: 从配置系统中提取指定主题的模板定义
+        #   - self['plotting']: 访问绘图相关的配置节点
+        #   - ['themes']: 访问主题配置字典，包含所有预定义的主题
+        #   - [theme]: 访问指定名称的主题配置
+        #   - ['template']: 提取该主题的模板定义数据（通常是从JSON文件加载的字典）
         pio.templates['vbt_' + theme] = go.layout.Template(self['plotting']['themes'][theme]['template'])
 
     def register_templates(self) -> None:

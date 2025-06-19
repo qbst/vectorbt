@@ -62,6 +62,10 @@ class SafeToStr:
 def prepare_for_doc(obj: tp.Any, replace: tp.DictLike = None, path: str = None) -> tp.Any:
     """
     准备对象以便在文档中使用，将其转换为更适合展示的格式。
+    
+    基本情况：numpy.dtype，numpy.ndarray，SafeToStr
+    递归情况：namedtuple，tuple，list，dict
+    其余情况：直接原obj
     """
     
     if isinstance(obj, SafeToStr):

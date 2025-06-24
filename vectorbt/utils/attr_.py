@@ -1,43 +1,13 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""
-属性访问和解析工具模块
 
-本模块是vectorbt框架中的核心工具之一，专门用于处理复杂的属性访问、方法调用和对象解析场景。
-它为整个vectorbt生态系统提供了统一的属性解析机制，特别是在量化金融分析中的复杂对象操作。
+import inspect  
+from collections.abc import Iterable  
 
-主要功能：
-1. 深度链式属性访问 (deep_getattr): 支持复杂的属性链和方法调用链
-2. 智能属性解析器 (AttrResolver): 提供缓存、条件参数传递和动态方法调用
-3. 字典式属性访问 (get_dict_attr): 绕过标准属性查找机制的直接访问
-
-设计理念：
-- 统一性: 为不同类型的对象提供一致的属性访问接口
-- 灵活性: 支持从简单的属性访问到复杂的方法调用链
-- 性能优化: 内置缓存机制，避免重复计算
-- 错误处理: 完善的异常处理和参数验证
-
-应用场景：
-- Portfolio对象中的动态指标计算
-- GenericAccessor中的链式数据处理
-- StatsBuilder中的统计指标解析
-- PlotsBuilder中的可视化参数处理
-
-技术特点：
-- 支持多种属性访问模式（字符串、元组、可迭代对象）
-- 智能参数匹配和传递
-- 基于方法签名的动态参数过滤
-- 灵活的缓存策略控制
-- 完整的类型注解支持
-"""
-
-import inspect  # Python内省模块，用于检查对象类型、方法签名等
-from collections.abc import Iterable  # 抽象基类，用于检查对象是否可迭代
-
-from vectorbt import _typing as tp  # vectorbt的类型注解模块
-from vectorbt.utils import checks  # vectorbt的检查工具模块
-from vectorbt.utils.config import merge_dicts, get_func_arg_names  # 配置工具：字典合并和函数参数名获取
+from vectorbt import _typing as tp  
+from vectorbt.utils import checks  
+from vectorbt.utils.config import merge_dicts, get_func_arg_names  
 
 
 def get_dict_attr(obj, attr):
@@ -152,11 +122,6 @@ def deep_getattr(obj: tp.Any,
     - 元组形式的方法调用（包含参数）
     - 可迭代对象形式的复杂调用链
     
-    在量化金融分析中的应用：
-    - Portfolio对象的指标计算链：'returns.rolling(20).mean()'
-    - 数据处理管道：'data.dropna().fillna(0).normalize()'
-    - 统计指标计算：'portfolio.trades.closed.avg_return'
-    
     属性链格式说明：
     - 字符串: 'attr1.attr2.method' - 简单的属性和无参方法调用
     - 元组(string,): ('method',) - 无参方法调用
@@ -201,7 +166,7 @@ def deep_getattr(obj: tp.Any,
     # 参数类型验证：确保attr_chain是支持的类型
     checks.assert_instance_of(attr_chain, (str, tuple, Iterable))
 
-    # 情况1：字符串格式的属性链
+    # 情况1：字符串格式的属性链。类似于
     if isinstance(attr_chain, str):
         # 如果包含点号，分割成属性链继续递归处理
         if '.' in attr_chain:
@@ -235,6 +200,7 @@ def deep_getattr(obj: tp.Any,
             return getattr_func(obj, attr_chain[0], args=attr_chain[1], kwargs=attr_chain[2])
     
     # 情况3：可迭代对象格式的复杂调用链
+    # 例如：[('method', (args,)), 'attr']
     result = obj  # 从初始对象开始
     for i, attr in enumerate(attr_chain):
         # 处理链中的每个元素
@@ -264,22 +230,6 @@ AttrResolverT = tp.TypeVar("AttrResolverT", bound="AttrResolver")
 
 class AttrResolver:
     """智能属性解析器基类，提供高级的属性访问、方法调用和缓存功能
-    
-    这是vectorbt框架中的核心基类之一，为复杂对象提供统一的属性解析机制。
-    它不仅支持标准的属性访问，还提供了智能参数匹配、缓存优化和条件性方法调用。
-    
-    核心特性：
-    1. 智能参数解析：根据方法签名自动过滤和传递参数
-    2. 内置缓存机制：避免重复计算，提高性能
-    3. 条件性调用：支持基于参数的动态方法选择
-    4. 参数预处理和后处理：可以在属性访问前后进行自定义处理
-    5. 别名支持：允许为对象定义多个引用名称
-    
-    在vectorbt中的应用：
-    - Portfolio类：智能解析财务指标和统计方法
-    - GenericAccessor：动态数据处理和转换
-    - ArrayWrapper：数组操作的统一接口
-    - StatsBuilder：统计指标的灵活计算
     
     设计模式：
     这个类实现了一种高级的反射模式，允许对象在运行时动态决定如何响应属性访问。

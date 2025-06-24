@@ -275,63 +275,13 @@ class ParamLoc(LocBase):
 
 def indexing_on_mapper(mapper: tp.Series, ref_obj: tp.SeriesFrame,
                        pd_indexing_func: tp.Callable) -> tp.Optional[tp.Series]:
-    """
-    Args:
-        mapper (tp.Series): 参数映射Series，建立列标签与参数值的对应关系
-            - 索引: 原始数据的列名或行名
-            - 值: 对应的参数值（如策略类型、窗口期、风险等级等）
-            - 名称: 映射器的名称，用于标识参数类型
-            示例: pd.Series([5, 10, 20], index=['MA_5', 'MA_10', 'MA_20'], name='window')
-                           
-        ref_obj (tp.SeriesFrame): 参考pandas对象，用于确定广播的目标形状
-            - 可以是DataFrame或Series
-            - 作为mapper广播的模板，确定结果的维度结构
-            - 通常是即将被索引的主数据对象
-            
-        pd_indexing_func (tp.Callable): pandas索引函数，要应用的具体索引操作
-            - 接受pandas对象作为参数的函数
-            - 返回索引操作后的新pandas对象
-            - 示例: lambda x: x.iloc[:, :2] (选择前两列)
-             
-    Returns:
-        tp.Optional[tp.Series]: 索引操作后的新mapper，如果操作失败则返回None
-            - 新mapper的索引对应索引后数据的列名或行名
-            - 新mapper的值保持原有的参数映射关系
-            - 维护原mapper的名称属性
-             
-    Raises:
-        AssertionError: 当输入参数类型不符合要求时抛出
-            - mapper不是pandas.Series类型
-            - ref_obj不是pandas.Series或pandas.DataFrame类型
-            
-        
-    实际应用示例:
-        data = pd.DataFrame({
-            'MA_5': [100, 101, 102],
-            'MA_10': [99, 100, 101], 
-            'MA_20': [98, 99, 100]
-        })
-
-        window_mapper = pd.Series([5, 10, 20], 
-                                index=['MA_5', 'MA_10', 'MA_20'], 
-                                name='window')
-        
-        def select_first_two(obj):
-            return obj.iloc[:, :2]
-        
-        new_mapper = indexing_on_mapper(window_mapper, data, select_first_two)
-        # 结果: Series([5, 10], index=['MA_5', 'MA_10'], name='window')
-    """
     checks.assert_instance_of(mapper, pd.Series)
     checks.assert_instance_of(ref_obj, (pd.Series, pd.DataFrame))
 
-    # DataFrame([[0, 1, 2], [0, 1, 2], [0, 1, 2]]) with columns ['MA_5', 'MA_10', 'MA_20']
     df_range_mapper = reshape_fns.broadcast_to(np.arange(len(mapper.index)), ref_obj)
     
-    # DataFrame([[0, 1], [0, 1], [0, 1]]) with columns ['MA_5', 'MA_10']
     loced_range_mapper = pd_indexing_func(df_range_mapper)
     
-    # new_mapper = Series([5, 10], index=['MA_5', 'MA_10'], name='window')
     new_mapper = mapper.iloc[loced_range_mapper.values[0]]
     
     if checks.is_frame(loced_range_mapper):

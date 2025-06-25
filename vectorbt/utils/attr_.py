@@ -403,20 +403,6 @@ class AttrResolver:
                      passed_kwargs_out: tp.KwargsLike = None) -> tp.Any:
         """核心属性解析方法，提供智能的属性访问、方法调用和缓存功能
         
-        这是AttrResolver类的核心方法，实现了复杂的属性解析逻辑：
-        1. 智能参数匹配：只传递方法签名中存在的参数
-        2. 缓存管理：避免重复计算，提高性能
-        3. getter方法支持：自动查找get_<attr>方法
-        4. 预处理和后处理：支持属性名和结果的动态转换
-        
-        解析流程：
-        1. 参数初始化和合并
-        2. 调用pre_resolve_attr进行属性名预处理
-        3. 检查是否存在get_<attr>方法
-        4. 区分属性和方法进行不同处理
-        5. 智能参数过滤和传递
-        6. 缓存检查和存储
-        7. 调用post_resolve_attr进行结果后处理
         
         Args:
             attr: 要解析的属性名称

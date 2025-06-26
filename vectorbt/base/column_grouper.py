@@ -258,14 +258,14 @@ class ColumnGrouper(Configured):
 
     def is_grouping_disabled(self, group_by: tp.GroupByLike = None) -> bool:
         """
-        检查是否 self.group_by 不为 None 且 group_by 为 None
+        检查是否 self.group_by 不为 None 且 group_by 为 None/False
         """
         return self.group_by is not None and not self.is_grouped(group_by=group_by)
 
     @cached_method
     def is_grouping_modified(self, group_by: tp.GroupByLike = None) -> bool:
         """
-        检查 self.group_by 是否和 group_by_to_index(self.columns, group_by) 不一致
+        检查 self.group_by 和 group_by_to_index(self.columns, group_by) 各自去重编码是否不一致
         """
         if group_by is None or (group_by is False and self.group_by is None):
             return False
@@ -286,7 +286,7 @@ class ColumnGrouper(Configured):
     @cached_method
     def is_grouping_changed(self, group_by: tp.GroupByLike = None) -> bool:
         """
-        检查 self.group_by 是否和 group_by 完全不一致
+        检查 self.group_by 是否和 group_by 不完全一致
         """
         if group_by is None or (group_by is False and self.group_by is None):
             return False
@@ -345,7 +345,9 @@ class ColumnGrouper(Configured):
 
     @cached_method
     def get_groups_and_columns(self, group_by: tp.GroupByLike = None, **kwargs) -> tp.Tuple[tp.Array1d, tp.Index]:
+        # 选择
         group_by = self.resolve_group_by(group_by=group_by, **kwargs)
+        # 分解（序号，元素）
         return get_groups_and_index(self.columns, group_by)
 
     def get_groups(self, **kwargs) -> tp.Array1d:

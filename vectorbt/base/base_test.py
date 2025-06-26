@@ -1,75 +1,39 @@
 import numpy as np
 import pandas as pd
-from vectorbt.base import reshape_fns
+from vectorbt.base.array_wrapper import ArrayWrapper
 
-def indexing_on_mapper(mapper: pd.Series, ref_obj: pd.DataFrame,
-                       pd_indexing_func) -> pd.Series:
-    """
-    当对数据进行索引时，同步更新参数映射
-    
-    Args:
-        mapper: 参数映射Series，索引为原始位置，值为参数值
-        ref_obj: 参考DataFrame，用于确定索引操作的目标形状
-        pd_indexing_func: 索引函数，定义如何对数据进行索引
-    
-    Returns:
-        新的参数映射Series，反映索引操作后的参数关系
-    """
-    # 1. 创建位置索引的广播版本
-    df_range_mapper = reshape_fns.broadcast_to(np.arange(len(mapper.index)), ref_obj)
-    print(df_range_mapper)
-    
-    # 2. 对位置索引应用相同的索引操作
-    loced_range_mapper = pd_indexing_func(df_range_mapper)
-    print(loced_range_mapper)
-    
-    # 3. 根据索引结果获取对应的参数值
-    new_mapper = mapper.iloc[loced_range_mapper.values[0]]
-    print(new_mapper)
-    
-    # 4. 构造新的参数映射
-    if isinstance(loced_range_mapper, pd.DataFrame):
-        return pd.Series(new_mapper.values, 
-                        index=loced_range_mapper.columns, 
-                        name=mapper.name)
-    elif isinstance(loced_range_mapper, pd.Series):
-        return pd.Series([new_mapper], 
-                        index=[loced_range_mapper.name], 
-                        name=mapper.name)
-    
-    return None
+# 准备测试数据
+print("=== 准备测试数据 ===")
+index = pd.Index(['2024-01-01', '2024-01-02', '2024-01-03'], name='date')
+columns = pd.Index(['AAPL', 'GOOGL', 'MSFT'], name='symbol')
 
-# ===== 例子1: DataFrame列索引 =====
-print("=== 例子1: DataFrame列索引 ===")
+# 创建基础ArrayWrapper
+wrapper = ArrayWrapper(
+    index=index,
+    columns=columns,
+    ndim=2
+)
 
-# 创建原始数据 - 包含3个不同参数的回测结果
-data = pd.DataFrame({
-    'strategy_A_period_10': [100, 105, 110, 108, 112],
-    'strategy_A_period_20': [100, 102, 105, 107, 109], 
-    'strategy_B_period_10': [100, 98, 95, 97, 99],
-    'strategy_B_period_20': [100, 101, 103, 102, 105],
-    'strategy_C_period_10': [100, 103, 106, 109, 112],
-    'strategy_C_period_20': [100, 99, 98, 101, 104]
-})
+print(f"原始包装器形状: {wrapper.shape}")
+print(f"原始索引: {wrapper.index}")
+print(f"原始列: {wrapper.columns}")
+print()
 
-# 创建参数映射 - 每列对应的策略类型
-param_mapper = pd.Series(['A', 'A', 'B', 'B', 'C', 'C'], 
-                        index=data.columns,
-                        name='strategy')
+# ============================================================================
+# 示例1: 基本行列索引 - 选择前2行和前2列
+# ============================================================================
+print("=== 示例1: 基本行列索引 (选择前2行前2列) ===")
 
-print("原始数据:")
-print(data)
-print("\n原始参数映射:")
-print(param_mapper)
+def indexing_func_1(x):
+    """选择前2行，前2列"""
+    return x.iloc[:2, :2]
 
-# 定义索引操作 - 选择前3列
-def select_first_three_cols(df):
-    return df.iloc[:, :3]
+result = wrapper.indexing_func_meta(indexing_func_1)
+new_wrapper, idx_idxs, col_idxs, ungrouped_col_idxs = result
 
-# 应用indexing_on_mapper
-new_mapper = indexing_on_mapper(param_mapper, data, select_first_three_cols)
-
-print("\n索引操作后的数据:")
-print(select_first_three_cols(data))
-print("\n索引操作后的参数映射:")
-print(new_mapper)
+print(f"新包装器形状: {new_wrapper.shape}")
+print(f"新索引: {new_wrapper.index}")
+print(f"新列: {new_wrapper.columns}")
+print(f"行索引数组: {idx_idxs}")
+print(f"列索引数组: {col_idxs}")
+print(f"未分组列索引数组: {ungrouped_col_idxs}")

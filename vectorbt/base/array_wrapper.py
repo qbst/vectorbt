@@ -236,18 +236,18 @@ class ArrayWrapper(Configured, PandasIndexer):
         
         # 索引标准化：确保索引为pandas Index对象
         if index is None:  # 如果未指定新索引
-            index = _self.index  # 使用当前索引
-        if not isinstance(index, pd.Index):  # 如果不是pandas Index
-            index = pd.Index(index)  # 转换为pandas Index
+            index = _self.index 
+        if not isinstance(index, pd.Index):
+            index = pd.Index(index)
             
         # 列索引处理：根据分组模式确定列索引
-        if columns is None:  # 如果未指定新列索引
-            if group_select:  # 如果启用分组选择
-                columns = _self.grouper.get_columns()  # 使用分组列
+        if columns is None:
+            if group_select:
+                columns = _self.grouper.get_columns()
             else:
-                columns = _self.columns  # 使用普通列
-        if not isinstance(columns, pd.Index):  # 如果不是pandas Index
-            columns = pd.Index(columns)  # 转换为pandas Index
+                columns = _self.columns 
+        if not isinstance(columns, pd.Index):
+            columns = pd.Index(columns) 
             
         # 创建中间包装器：用于索引操作的临时包装器
         if group_select:  # 如果分组选择模式
@@ -968,6 +968,7 @@ class ArrayWrapper(Configured, PandasIndexer):
 
     def regroup(self: ArrayWrapperT, group_by: tp.GroupByLike, **kwargs) -> ArrayWrapperT:
         """
+        基于self使用group_by重新构建一个
         重新分组对象
         
         根据新的分组依据创建新的ArrayWrapper实例。只有在分组发生变化时

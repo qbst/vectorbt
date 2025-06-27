@@ -217,30 +217,29 @@ class ArrayWrapper(Configured, PandasIndexer):
             Index(['X', 'Y'], dtype='object')
         
         """
-        from vectorbt._settings import settings  # 导入vectorbt配置
-        array_wrapper_cfg = settings['array_wrapper']  # 获取数组包装器配置
+        from vectorbt._settings import settings  
+        array_wrapper_cfg = settings['array_wrapper'] 
 
-        # 参数默认值处理：从实例或全局配置获取默认值
-        if column_only_select is None:  # 如果未指定列选择模式
-            column_only_select = self.column_only_select  # 使用实例的设置
-        if column_only_select is None:  # 如果实例也未设置
-            column_only_select = array_wrapper_cfg['column_only_select']  # 使用全局配置
-        if group_select is None:  # 如果未指定分组选择模式
-            group_select = self.group_select  # 使用实例的设置
-        if group_select is None:  # 如果实例也未设置
-            group_select = array_wrapper_cfg['group_select']  # 使用全局配置
+        if column_only_select is None:  
+            column_only_select = self.column_only_select 
+        if column_only_select is None:
+            column_only_select = array_wrapper_cfg['column_only_select']
+        if group_select is None: 
+            group_select = self.group_select 
+        if group_select is None: 
+            group_select = array_wrapper_cfg['group_select']
             
-        # 重新分组：根据group_by参数创建新的分组
-        _self = self.regroup(group_by)  # 创建重新分组的实例
-        group_select = group_select and _self.grouper.is_grouped()  # 只有在实际分组时才启用分组选择
+        # 根据group_by参数创建新的ArrayWrapper实例_self
+        _self = self.regroup(group_by) 
+        group_select = group_select and _self.grouper.is_grouped() 
         
-        # 索引标准化：确保索引为pandas Index对象
-        if index is None:  # 如果未指定新索引
+        # index = _self.index ∪ index
+        if index is None:  
             index = _self.index 
         if not isinstance(index, pd.Index):
             index = pd.Index(index)
             
-        # 列索引处理：根据分组模式确定列索引
+        # columns = (group_select ? _self.grouper.get_columns() : _self.columns) ∪ columns
         if columns is None:
             if group_select:
                 columns = _self.grouper.get_columns()
@@ -250,28 +249,26 @@ class ArrayWrapper(Configured, PandasIndexer):
             columns = pd.Index(columns) 
             
         # 创建中间包装器：用于索引操作的临时包装器
-        if group_select:  # 如果分组选择模式
+        if group_select: 
             # 分组作为列：使用分组后的维度
             i_wrapper = ArrayWrapper(index, columns, _self.get_ndim())
         else:
-            # 列作为列：使用原始维度
             i_wrapper = ArrayWrapper(index, columns, _self.ndim)
             
-        # 计算行列数量
-        n_rows = len(index)  # 行数
-        n_cols = len(columns)  # 列数
+        n_rows = len(index)
+        n_cols = len(columns)
 
         # 列选择模式处理：将包装器视为列的Series进行索引
-        if column_only_select:  # 如果启用列选择模式
+        if column_only_select:
             if i_wrapper.ndim == 1:  # 如果已经是1维（单列）
                 raise IndexingError("Columns only: This object already contains one column of data")
             try:
                 # 创建列映射器：使用列索引创建一个Series进行索引操作
                 col_mapper = pd_indexing_func(i_wrapper.wrap_reduced(np.arange(n_cols), columns=columns))
-            except pd.core.indexing.IndexingError as e:  # 捕获pandas索引错误
+            except pd.core.indexing.IndexingError as e:
                 warnings.warn("Columns only: Make sure to treat this object "
                               "as a Series of columns rather than a DataFrame", stacklevel=2)
-                raise e  # 重新抛出异常
+                raise e
             # 处理索引结果：确定新的列索引和维度
             if checks.is_series(col_mapper):  # 如果返回Series（多列选择）
                 new_columns = col_mapper.index  # 新列索引
@@ -687,26 +684,7 @@ class ArrayWrapper(Configured, PandasIndexer):
         return self._ndim  # 返回私有属性_ndim
 
     def get_ndim(self, group_by: tp.GroupByLike = None) -> int:
-        """
-        获取分组感知的维度数量
-        
-        Args:
-            group_by: 分组依据，可选
-            
-        Returns:
-            int: 分组感知的维度数量
-            
-        Examples:
-            >>> wrapper = ArrayWrapper(
-            ...     index=pd.Index(['A']),
-            ...     columns=pd.Index(['X', 'Y', 'Z']),
-            ...     ndim=2,
-            ...     group_by=['G1', 'G1', 'G2']
-            ... )
-            >>> print(wrapper.get_ndim())  # 分组后有2个组，仍为2维
-            2
-        """
-        return self.resolve(group_by=group_by).ndim  # 解析分组后返回维度
+        return self.resolve(group_by=group_by).ndim
 
     @property
     def shape(self) -> tp.Shape:
@@ -1285,43 +1263,41 @@ class ArrayWrapper(Configured, PandasIndexer):
                 fillna = -1
 
         def _wrap_reduced(arr):
-            nonlocal name_or_index
+            nonlocal name_or_index  # 声明使用外层作用域中的name_or_index变量，允许函数内部修改该变量
 
-            arr = np.asarray(arr)
-            if fillna is not None:
-                arr[pd.isnull(arr)] = fillna
-            if arr.ndim == 0:
+            arr = np.asarray(arr)  # 将输入数组转换为NumPy数组格式，确保后续操作的兼容性
+            if fillna is not None:  # 检查是否需要填充缺失值
+                arr[pd.isnull(arr)] = fillna  # 使用pandas的isnull函数检测缺失值，并用fillna指定的值进行填充
+            if arr.ndim == 0:  # 处理0维数组（标量）的情况
                 # Scalar per Series/DataFrame
-                return pd.Series(arr, dtype=dtype)[0]
-            if arr.ndim == 1:
-                if _self.ndim == 1:
-                    if arr.shape[0] == 1:
-                        # Scalar per Series/DataFrame with one column
-                        return pd.Series(arr, dtype=dtype)[0]
-                    # Array per Series
-                    sr_name = columns[0]
-                    if sr_name == 0:  # was arr Series before
-                        sr_name = None
-                    if isinstance(name_or_index, str):
-                        name_or_index = None
-                    return pd.Series(arr, index=name_or_index, name=sr_name, dtype=dtype)
-                # Scalar per column in arr DataFrame
-                return pd.Series(arr, index=columns, name=name_or_index, dtype=dtype)
-            if arr.ndim == 2:
-                if arr.shape[1] == 1 and _self.ndim == 1:
-                    arr = reshape_fns.soft_to_ndim(arr, 1)
-                    # Array per Series
-                    sr_name = columns[0]
-                    if sr_name == 0:  # was arr Series before
-                        sr_name = None
-                    if isinstance(name_or_index, str):
-                        name_or_index = None
-                    return pd.Series(arr, index=name_or_index, name=sr_name, dtype=dtype)
-                # Array per column in DataFrame
-                if isinstance(name_or_index, str):
-                    name_or_index = None
-                return pd.DataFrame(arr, index=name_or_index, columns=columns, dtype=dtype)
-            raise ValueError(f"{arr.ndim}-d input is not supported")
+                return pd.Series(arr, dtype=dtype)[0]  # 将标量包装为Series再取第一个元素，确保返回正确的数据类型
+            if arr.ndim == 1:  # 处理1维数组的情况
+                if _self.ndim == 1:  # 如果原始包装器是1维的（Series类型）
+                    if arr.shape[0] == 1:  # 如果数组只有一个元素
+                        return pd.Series(arr, dtype=dtype)[0]  # 返回标量值，从单元素Series中提取
+                    sr_name = columns[0]  # 获取第一个（也是唯一的）列名作为Series名称
+                    if sr_name == 0:  # was arr Series before  # 如果列名是默认的0（表示原来是无名Series）
+                        sr_name = None  # 将Series名称设为None，保持pandas的默认行为
+                    if isinstance(name_or_index, str):  # 如果name_or_index是字符串类型
+                        name_or_index = None  # 将其设为None，因为在1维情况下字符串应该用作名称而不是索引
+                    return pd.Series(arr, index=name_or_index, name=sr_name, dtype=dtype)  # 创建Series，使用name_or_index作为索引，sr_name作为名称
+                # Scalar per column in arr DataFrame  # 处理2维包装器缩减为1维的情况（每列一个标量）
+                return pd.Series(arr, index=columns, name=name_or_index, dtype=dtype)  # 创建Series，列名作为索引，name_or_index作为Series名称
+            if arr.ndim == 2:  # 处理2维数组的情况
+                if arr.shape[1] == 1 and _self.ndim == 1:  # 如果数组只有一列且原始包装器是1维的
+                    arr = reshape_fns.soft_to_ndim(arr, 1)  # 将2维数组转换为1维数组，去除多余的维度
+                    # Array per Series  # 按Series处理
+                    sr_name = columns[0]  # 获取列名作为Series名称
+                    if sr_name == 0:  # was arr Series before  # 如果列名是默认的0
+                        sr_name = None  # 设为None，保持原Series的无名状态
+                    if isinstance(name_or_index, str):  # 如果name_or_index是字符串
+                        name_or_index = None  # 设为None，字符串不能作为索引使用
+                    return pd.Series(arr, index=name_or_index, name=sr_name, dtype=dtype)  # 创建Series
+                # Array per column in DataFrame  # 处理标准的2维DataFrame情况
+                if isinstance(name_or_index, str):  # 如果name_or_index是字符串类型
+                    name_or_index = None  # 设为None，因为DataFrame不能使用字符串作为索引
+                return pd.DataFrame(arr, index=name_or_index, columns=columns, dtype=dtype)  # 创建DataFrame，使用name_or_index作为行索引，columns作为列索引
+            raise ValueError(f"{arr.ndim}-d input is not supported")  # 如果数组维度不是0、1、2，抛出不支持的维度错误
 
         out = _wrap_reduced(arr)
         if to_index:

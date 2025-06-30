@@ -5,6 +5,7 @@
 
 from vectorbt.base.array_wrapper import ArrayWrapper
 
+# __all__：当使用 from module import xxx 时，xxx 只能是 __all__ 中的元素
 __all__ = [
     'ArrayWrapper'
 ]

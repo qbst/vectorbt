@@ -1564,27 +1564,6 @@ class Wrapping(Configured, PandasIndexer, AttrResolver):
 
     @property
     def wrapper(self) -> ArrayWrapper:
-        """
-        数组包装器
-        
-        获取与此Wrapping实例关联的ArrayWrapper对象。
-        包装器提供了所有的元数据管理、索引操作、分组功能等。
-        
-        Returns:
-            ArrayWrapper: 数组包装器实例
-            
-        Examples:
-            >>> wrapping = MyWrappingClass(data)
-            >>> wrapper = wrapping.wrapper
-            >>> print(wrapper.shape)
-            (100, 5)
-            >>> print(wrapper.columns.tolist())
-            ['col1', 'col2', 'col3', 'col4', 'col5']
-            
-            # 访问包装器的功能
-            >>> print(wrapper.freq)  # 时间频率
-            >>> print(wrapper.grouper.is_grouped())  # 是否分组
-        """
         return self._wrapper
 
     def regroup(self: WrappingT, group_by: tp.GroupByLike, **kwargs) -> WrappingT:

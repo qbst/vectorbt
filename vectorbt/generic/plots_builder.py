@@ -23,26 +23,7 @@ from vectorbt.utils.template import deep_substitute
 
 class MetaPlotsBuilderMixin(type):
     """
-    图表构建器混入类的元类
-    
-    该元类为PlotsBuilderMixin提供了一个只读的类属性`subplots`，通过元类机制
-    实现了类级别的属性访问控制。这种设计模式确保了子图配置的封装性和一致性。
-    
-    设计目的：
-    - 提供类级别的配置访问：允许通过类名直接访问子图配置
-    - 确保配置的只读性：防止意外修改类级别的默认配置
-    - 支持继承机制：子类可以继承并扩展父类的子图配置
-    
-    使用示例：
-        >>> # 通过类名访问子图配置
-        >>> config = SomeAnalyzer.subplots
-        >>> print(config.keys())  # 显示所有可用的子图类型
-        
-        >>> # 在子类中扩展配置
-        >>> class CustomAnalyzer(PlotsBuilderMixin):
-        ...     _subplots = Config({
-        ...         'custom_plot': {'plot_func': 'plot_custom'}
-        ...     })
+    图表构建器混入类的元类。为PlotsBuilderMixin提供了一个只读的类属性`subplots`。
     """
 
     @property
@@ -62,10 +43,7 @@ class MetaPlotsBuilderMixin(type):
 
 class PlotsBuilderMixin(metaclass=MetaPlotsBuilderMixin):
     """
-    图表构建器混入类
-    
-    这是vectorbt框架中图表可视化的核心混入类，为量化分析对象提供统一的绘图接口。
-    该类实现了一个完整的图表构建系统，支持多子图、动态配置、标签过滤等高级功能。
+    图表构建器混入类。为量化分析对象提供统一的绘图接口。
     
     核心特性：
     1. 多子图支持：可以在一个图表中组合多个不同类型的子图
@@ -74,12 +52,6 @@ class PlotsBuilderMixin(metaclass=MetaPlotsBuilderMixin):
     4. 标签过滤：使用标签系统控制子图的显示条件
     5. 模板系统：支持配置参数的动态替换
     6. 自动布局：智能计算图表尺寸和子图间距
-    
-    设计模式：
-    - 混入模式(Mixin Pattern)：为不同类型的分析对象提供绘图能力
-    - 策略模式(Strategy Pattern)：通过plot_func支持多种绘图策略
-    - 模板方法模式(Template Method)：定义了绘图的标准流程
-    - 配置模式(Configuration Pattern)：使用配置对象管理复杂参数
     
     必要条件：
     - 必须继承自vectorbt.base.array_wrapper.Wrapping类

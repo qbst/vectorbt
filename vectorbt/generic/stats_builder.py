@@ -3,61 +3,25 @@
 
 """
 统计构建器混入模块 (Statistics Builder Mixin Module)
+将复杂的量化分析结果转换为标准化的统计指标。
 
-本模块是vectorbt量化分析框架中负责统计指标计算的核心组件，提供了一个强大且灵活的
-统计指标构建系统。该系统能够将复杂的量化分析结果转换为标准化的统计指标。
-
-设计理念与架构：
-1. 模块化设计：通过指标(metric)的概念，将复杂的统计分析分解为多个独立的计算单元
-2. 配置驱动：使用声明式配置定义指标结构，支持动态参数替换和条件计算
-3. 混入模式：通过Mixin模式为不同的量化分析类提供统一的统计接口
-4. 模板系统：集成模板引擎，支持动态配置和参数化计算
-5. 标签过滤：通过标签系统实现指标的条件计算和分组管理
-
-主要功能特性：
-- 指标管理：支持多指标计算，自动处理依赖关系和计算顺序
-- 动态配置：运行时根据数据特征和用户参数动态调整指标配置
-- 标签过滤：使用布尔表达式进行指标的条件计算
-- 模板替换：支持配置参数的动态替换和计算
-- 聚合处理：智能处理多列数据的聚合和选择
-- 缓存优化：内置缓存机制提升重复计算的性能
-
-应用场景：
-- 量化策略性能评估：收益率、夏普比率、最大回撤、胜率等核心指标
-- 风险管理分析：VaR、CVaR、波动率、相关性等风险指标
-- 投资组合分析：资产配置效率、分散化指标、再平衡频率等
-- 交易行为分析：交易频率、持仓时间、成交量分布等
-- 回测结果评估：信息比率、卡尔马比率、索提诺比率等高级指标
-
-技术实现：
-- 基于pandas和numpy构建，确保高性能的数值计算
-- 使用元类(Metaclass)模式实现配置的继承和扩展
-- 集成vectorbt的数组包装器(ArrayWrapper)系统
-- 支持多种数据源：pandas DataFrame/Series、NumPy数组等
-- 提供完整的错误处理和警告系统
-
-该模块与vectorbt的其他核心模块紧密集成：
-- 与plots_builder模块共享配置管理和过滤机制
-- 与array_wrapper模块协作处理数据包装和索引
-- 与template模块配合实现动态配置替换
-- 与config模块集成提供配置管理功能
 """
 
-import inspect  # 导入inspect模块，用于函数签名检查和代码内省
-import string  # 导入string模块，用于字符串模板处理
-import warnings  # 导入warnings模块，用于发出运行时警告
-from collections import Counter  # 导入Counter类，用于统计指标名称的重复次数
+import inspect
+import string  
+import warnings
+from collections import Counter
 
-import numpy as np  # 导入numpy，用于数值计算和统计函数
-import pandas as pd  # 导入pandas，用于数据结构和数据分析
+import numpy as np
+import pandas as pd
 
-from vectorbt import _typing as tp  # 导入vectorbt类型定义模块
-from vectorbt.base.array_wrapper import Wrapping  # 导入数组包装器基类
-from vectorbt.utils import checks  # 导入检查工具模块
-from vectorbt.utils.attr_ import get_dict_attr  # 导入属性获取工具函数
-from vectorbt.utils.config import Config, merge_dicts, get_func_arg_names  # 导入配置管理工具
-from vectorbt.utils.tags import match_tags  # 导入标签匹配工具函数
-from vectorbt.utils.template import deep_substitute  # 导入深度模板替换工具函数
+from vectorbt import _typing as tp
+from vectorbt.base.array_wrapper import Wrapping
+from vectorbt.utils import checks
+from vectorbt.utils.attr_ import get_dict_attr
+from vectorbt.utils.config import Config, merge_dicts, get_func_arg_names
+from vectorbt.utils.tags import match_tags
+from vectorbt.utils.template import deep_substitute 
 
 
 class MetaStatsBuilderMixin(type):

@@ -1,54 +1,264 @@
 # Copyright (c) 2021 Oleg Polakow. All rights reserved.
 # This code is licensed under Apache 2.0 with Commons Clause license (see LICENSE.md for details)
 
-"""Math utilities."""
+"""
+================================================================================
+VECTORBT UTILS MODULE: 高精度数学运算工具
+================================================================================
 
-import numpy as np
-from numba import njit
+文件设计逻辑和作用概述：
+本文件是vectorbt量化交易框架中专门用于处理浮点数精度问题的核心数学工具模块。
+在量化交易和金融计算中，由于浮点数的内在精度限制，直接使用Python的数值比较
+和运算可能会导致累积误差，进而影响交易决策的准确性。
 
+该模块提供了一套经过Numba JIT编译优化的高精度浮点数比较和运算函数，专门用于
+解决以下量化交易中的关键问题：
+
+1. **交易仓位计算精度**：避免因浮点数精度误差导致的仓位无法完全平仓
+2. **价格比较准确性**：确保价格突破、支撑阻力位判断的准确性
+3. **资金管理精度**：防止资金分配中的微小误差累积
+4. **技术指标计算**：保证移动平均线、RSI等指标计算的稳定性
+5. **回测系统可靠性**：确保策略回测结果的一致性和可重复性
+
+核心设计原则：
+- **双重容差机制**：结合相对容差(rel_tol)和绝对容差(abs_tol)进行精确比较
+- **高性能优化**：所有函数使用@njit装饰器，达到接近C语言的执行速度
+- **边界条件处理**：完善处理NaN、无穷大等特殊数值情况
+- **累积误差预防**：通过精确的加法运算防止微小误差的累积
+
+技术实现特点：
+- 使用IEEE 754标准的浮点数比较算法
+- 采用max(rel_tol * max(abs(a), abs(b)), abs_tol)的混合容差策略
+- 针对金融数据的特殊性进行了优化调整
+- 与NumPy的数值计算生态完全兼容
+"""
+
+import numpy as np  # 导入NumPy库，提供高性能的数值计算和数组操作功能
+from numba import njit  # 导入Numba的即时编译装饰器，用于将Python函数编译为机器码
+
+# 相对容差：用于处理相对误差的阈值
+# 设定为1e-9意味着两个数值的相对差异小于十亿分之一时被认为相等
+# 例如：1,000,000,000 和 1,000,000,001 在相对容差下可能被认为相等
 rel_tol = 1e-9  # 1,000,000,000 == 1,000,000,001
+
+# 绝对容差：用于处理绝对误差的阈值
+# 设定为1e-12意味着两个数值的绝对差异小于万亿分之一时被认为相等
+# 例如：0.000000000001 和 0.000000000002 在绝对容差下可能被认为相等
 abs_tol = 1e-12  # 0.000000000001 == 0.000000000002
 
 
 @njit(cache=True)
 def is_close_nb(a: float, b: float, rel_tol: float = rel_tol, abs_tol: float = abs_tol) -> bool:
-    """Tell whether two values are approximately equal."""
+    """
+    高精度浮点数相等比较函数
+    
+    该函数实现了基于IEEE 754标准的高精度浮点数比较算法，专门用于解决
+    量化交易中因浮点数精度问题导致的数值比较不准确的问题。
+    
+    算法核心思想：
+    1. 首先处理特殊值（NaN、无穷大）
+    2. 然后进行精确相等比较
+    3. 最后使用混合容差策略进行近似相等判断
+    
+    混合容差策略：
+    - 相对容差：适用于较大数值的比较，容差随数值大小动态调整
+    - 绝对容差：适用于接近零的小数值比较，提供固定的最小容差
+    - 取两者的最大值作为最终容差，确保在所有数值范围内的准确性
+    
+    参数：
+        a (float): 第一个待比较的浮点数
+        b (float): 第二个待比较的浮点数
+        rel_tol (float, optional): 相对容差，默认为1e-9
+                                  控制相对误差的容忍度
+        abs_tol (float, optional): 绝对容差，默认为1e-12
+                                  控制绝对误差的容忍度
+    
+    返回：
+        bool: 如果两个数值在容差范围内相等则返回True，否则返回False
+    
+    技术细节：
+        - 使用@njit装饰器编译为机器码，执行速度极快
+        - 特殊值处理：NaN和无穷大始终返回False
+        - 精确相等优先：如果两数完全相等，直接返回True
+        - 混合容差：max(rel_tol * max(abs(a), abs(b)), abs_tol)
+        - 算法复杂度：O(1)，常数时间复杂度
+    """
     if np.isnan(a) or np.isnan(b):
         return False
+    
     if np.isinf(a) or np.isinf(b):
         return False
+    
+    # 首先进行精确相等比较
+    # 如果两个数值在内存中的二进制表示完全相同，则直接返回True
+    # 这是最快的比较方式，适用于整数和某些特殊浮点数
     if a == b:
-        return True
+        return True  # 精确相等，无需进一步的容差比较
+    
+    # 使用混合容差策略进行近似相等判断
+    # 计算两数的绝对差值，并与动态容差比较
+    # 动态容差 = max(相对容差 * 较大数值的绝对值, 绝对容差)
+    # 这种策略确保了在不同数值范围内都能提供合适的比较精度
     return abs(a - b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
 
 
 @njit(cache=True)
 def is_close_or_less_nb(a: float, b: float, rel_tol: float = rel_tol, abs_tol: float = abs_tol) -> bool:
-    """Tell whether the first value is approximately less than or equal to the second value."""
+    """
+    高精度浮点数"小于等于"比较函数
+    
+    该函数实现了考虑浮点数精度的"小于等于"比较，专门用于量化交易中
+    需要判断数值关系的场景。函数首先检查两数是否在容差范围内相等，
+    如果相等则返回True；否则判断第一个数是否严格小于第二个数。
+    
+    设计思路：
+    1. 先使用高精度比较判断两数是否相等
+    2. 如果不相等，则进行严格的小于比较
+    3. 这种设计避免了因浮点数精度问题导致的错误判断
+    
+    参数：
+        a (float): 第一个待比较的浮点数（左操作数）
+        b (float): 第二个待比较的浮点数（右操作数）
+        rel_tol (float, optional): 相对容差，默认为1e-9
+        abs_tol (float, optional): 绝对容差，默认为1e-12
+    
+    返回：
+        bool: 如果a小于等于b（在容差范围内）则返回True，否则返回False
+    
+    技术实现：
+        - 利用is_close_nb函数进行精确相等性检查
+        - 如果不相等，则使用标准的小于比较
+        - 整个函数具有O(1)的时间复杂度
+        - 通过Numba编译获得最优性能
+    """
+    # 首先检查两数是否在容差范围内相等
+    # 如果相等，则a <= b成立，返回True
     if is_close_nb(a, b, rel_tol=rel_tol, abs_tol=abs_tol):
-        return True
-    return a < b
+        return True  # 相等情况下，小于等于条件成立
+    
+    # 如果两数不相等，则进行严格的小于比较
+    # 这里使用Python的标准浮点数比较运算符
+    return a < b  # 返回严格小于的比较结果
 
 
-@njit(cache=True)
+@njit(cache=True)  # 使用Numba JIT编译器进行即时编译，启用编译缓存
 def is_less_nb(a: float, b: float, rel_tol: float = rel_tol, abs_tol: float = abs_tol) -> bool:
-    """Tell whether the first value is approximately less than the second value."""
+    """
+    高精度浮点数"严格小于"比较函数
+    
+    该函数实现了考虑浮点数精度的"严格小于"比较，专门用于量化交易中
+    需要判断严格不等关系的场景。函数首先检查两数是否在容差范围内相等，
+    如果相等则返回False；否则判断第一个数是否严格小于第二个数。
+    
+    设计思路：
+    1. 先使用高精度比较判断两数是否相等
+    2. 如果相等，则严格小于条件不成立，返回False
+    3. 如果不相等，则进行严格的小于比较
+    4. 这种设计确保了"严格小于"的准确性
+    
+    
+    参数：
+        a (float): 第一个待比较的浮点数（左操作数）
+        b (float): 第二个待比较的浮点数（右操作数）
+        rel_tol (float, optional): 相对容差，默认为1e-9
+        abs_tol (float, optional): 绝对容差，默认为1e-12
+    
+    返回：
+        bool: 如果a严格小于b（不在容差范围内相等）则返回True，否则返回False
+    
+    技术实现：
+        - 利用is_close_nb函数进行精确相等性检查
+        - 相等时返回False，确保"严格小于"的语义
+        - 不相等时进行标准的小于比较
+        - 整个函数具有O(1)的时间复杂度
+        - 通过Numba编译获得最优性能
+    """
+    # 首先检查两数是否在容差范围内相等
+    # 如果相等，则a < b不成立（严格小于要求不相等），返回False
     if is_close_nb(a, b, rel_tol=rel_tol, abs_tol=abs_tol):
-        return False
-    return a < b
+        return False  # 相等情况下，严格小于条件不成立
+    
+    # 如果两数不相等，则进行严格的小于比较
+    # 这里使用Python的标准浮点数比较运算符
+    return a < b  # 返回严格小于的比较结果
 
 
-@njit(cache=True)
+@njit(cache=True)  # 使用Numba JIT编译器进行即时编译，启用编译缓存
 def is_addition_zero_nb(a: float, b: float, rel_tol: float = rel_tol, abs_tol: float = abs_tol) -> bool:
-    """Tell whether addition of two values yields zero."""
+    """
+    高精度浮点数加法零值检测函数
+    
+    该函数用于检测两个浮点数相加是否会得到零值，专门处理量化交易中
+    因浮点数精度问题导致的加法运算不准确的情况。函数采用了两种检测策略：
+    1. 符号相反的数值：检查绝对值是否相等
+    2. 符号相同的数值：检查加法结果是否接近零
+    
+    设计思路：
+    当两个数符号相反时（如 0.1 和 -0.1），它们的加法结果应该严格为零，
+    但由于浮点数精度问题，可能会得到一个非常接近零的数值。此时通过
+    比较两数的绝对值是否相等来判断。
+    
+    参数：
+        a (float): 第一个加数
+        b (float): 第二个加数
+        rel_tol (float, optional): 相对容差，默认为1e-9
+        abs_tol (float, optional): 绝对容差，默认为1e-12
+    
+    返回：
+        bool: 如果两数相加结果为零（在容差范围内）则返回True，否则返回False
+    
+    算法细节：
+        - 使用np.sign()函数判断数值符号
+        - 符号相反时比较绝对值：abs(a) ≈ abs(b)
+        - 符号相同时检查和：a + b ≈ 0
+        - 利用is_close_nb函数进行精确比较
+        - 整个函数具有O(1)的时间复杂度
+    """
+    # 检查两个数的符号是否相反
+    # np.sign()函数返回数值的符号：正数返回1，负数返回-1，零返回0
     if np.sign(a) != np.sign(b):
+        # 如果符号相反，检查两数的绝对值是否相等
+        # 例如：0.1 和 -0.1 的绝对值都是 0.1
+        # 如果绝对值相等，则它们的和应该为零
         return is_close_nb(abs(a), abs(b), rel_tol=rel_tol, abs_tol=abs_tol)
+    
+    # 如果符号相同，直接检查两数之和是否接近零
+    # 例如：0.0000001 和 -0.0000001 虽然符号相反，但和接近零
+    # 或者：两个很小的同号数，其和可能因精度问题接近零
     return is_close_nb(a + b, 0., rel_tol=rel_tol, abs_tol=abs_tol)
 
 
-@njit(cache=True)
+@njit(cache=True)  # 使用Numba JIT编译器进行即时编译，启用编译缓存
 def add_nb(a: float, b: float, rel_tol: float = rel_tol, abs_tol: float = abs_tol) -> float:
-    """Add two floats."""
+    """
+    高精度浮点数加法函数
+    
+    该函数实现了考虑浮点数精度的加法运算，专门用于量化交易中需要
+    精确加法计算的场景。函数首先检查两数相加是否会得到零值，
+    如果是则返回精确的0.0，否则返回标准的加法结果。
+    
+    参数：
+        a (float): 第一个加数
+        b (float): 第二个加数
+        rel_tol (float, optional): 相对容差，默认为1e-9
+        abs_tol (float, optional): 绝对容差，默认为1e-12
+    
+    返回：
+        float: 两数相加的结果，如果结果应该为零则返回0.0
+    
+    技术实现：
+        - 利用is_addition_zero_nb函数检查是否为零
+        - 零值情况返回精确的0.0
+        - 非零值情况返回标准加法结果
+        - 整个函数具有O(1)的时间复杂度
+        - 通过Numba编译获得最优性能
+
+    """
+    # 检查两数相加是否应该得到零值
+    # 如果是，返回精确的0.0以消除浮点数精度误差
     if is_addition_zero_nb(a, b, rel_tol=rel_tol, abs_tol=abs_tol):
-        return 0.
-    return a + b
+        return 0.  # 返回精确的零值，避免微小的非零结果
+    
+    # 如果两数相加不应该为零，则返回标准的加法结果
+    # 这保持了正常加法运算的性能和精度
+    return a + b  # 返回标准的浮点数加法结果

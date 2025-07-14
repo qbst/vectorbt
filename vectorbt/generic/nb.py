@@ -213,7 +213,7 @@ def shuffle_nb(a: tp.Array2d, seed: tp.Optional[int] = None) -> tp.Array2d:
 
 def _set_by_mask_1d_nb(arr, mask, value):
     """
-    根据布尔掩码设置一维数组元素的内部实现函数
+    根据布尔掩码设置一维数组元素的内部实现函数，返回 arr[mask] = value 后的 arr
     
     这是一个内部函数，用于处理类型推断和数组转换。通过分析输入数组和值的类型，
     确定输出数组的最适合类型，以避免精度损失或类型错误。

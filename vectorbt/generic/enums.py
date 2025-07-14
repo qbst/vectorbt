@@ -6,10 +6,7 @@
 VECTORBT GENERIC MODULE: ENUMERATED TYPES AND DATA SCHEMAS
 ================================================================================
 
-文件作用概述：
-本文件是vectorbt量化交易框架中枚举类型和数据结构定义的核心模块，专门为范围分析（Range Analysis）
-和回撤分析（Drawdown Analysis）提供标准化的数据表示格式。该模块通过定义命名元组枚举和结构化
-数据类型，为vectorbt框架的记录系统（Records System）奠定了类型安全的基础。
+为范围分析（Range Analysis）和回撤分析（Drawdown Analysis）提供标准化的数据表示格式。
 
 核心设计逻辑：
 1. **状态枚举标准化**：通过RangeStatus和DrawdownStatus枚举，为时间序列分析中的状态转换

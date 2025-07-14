@@ -145,25 +145,6 @@ def col_range_nb(col_arr: tp.Array1d, n_cols: int) -> tp.ColRange:
         >>> # [[0 3]  # 列0: 索引0到3(不包含)
         >>> #  [3 5]  # 列1: 索引3到5(不包含)  
         >>> #  [5 6]] # 列2: 索引5到6(不包含)
-        
-        >>> # 量化应用：多资产交易记录的索引
-        >>> # 假设有3只股票的交易记录
-        >>> trades_col = np.array([0, 0, 1, 1, 1, 2, 2])  # 股票编号
-        >>> n_stocks = 3
-        >>> 
-        >>> # 构建交易记录的列范围索引
-        >>> trade_ranges = vbt.records.nb.col_range_nb(trades_col, n_stocks)
-        >>> print("\\n交易记录范围:")
-        >>> for i, (start, end) in enumerate(trade_ranges):
-        ...     if start != -1:
-        ...         print(f"股票{i}: 交易记录索引 {start} 到 {end-1}")
-        ...     else:
-        ...         print(f"股票{i}: 无交易记录")
-        
-        >>> # 使用范围索引快速访问特定股票的交易
-        >>> stock_1_start, stock_1_end = trade_ranges[1]
-        >>> stock_1_trades = trades_col[stock_1_start:stock_1_end]
-        >>> print(f"\\n股票1的交易记录: {stock_1_trades}")
     
     性能特点：
         - 时间复杂度：O(n)，其中n是col_arr的长度
@@ -234,6 +215,7 @@ def col_range_select_nb(col_range: tp.ColRange, new_cols: tp.Array1d) -> tp.Tupl
         >>> original_data = np.array([100, 101, 102, 200, 201, 300])  # 原始数据
         >>> col_arr = np.array([0, 0, 0, 1, 1, 2])                    # 列分布
         >>> col_range = vbt.records.nb.col_range_nb(col_arr, 3)
+        >>> print(f"列范围索引: {col_range}") # [[0 3] [3 5] [5 6]]
         >>> 
         >>> # 选择列0和列2
         >>> selected_cols = np.array([0, 2])
@@ -242,28 +224,6 @@ def col_range_select_nb(col_range: tp.ColRange, new_cols: tp.Array1d) -> tp.Tupl
         >>> print(f"选择的索引: {indices}")          # [0, 1, 2, 5]
         >>> print(f"新列数组: {new_col_arr}")        # [0, 0, 0, 1] (重新编号)
         >>> print(f"选择的数据: {original_data[indices]}")  # [100, 101, 102, 300]
-        
-        >>> # 量化应用：选择特定股票的交易记录
-        >>> # 原始交易数据
-        >>> trade_prices = np.array([100.5, 101.2, 99.8, 50.3, 51.1, 25.7, 26.1])
-        >>> trade_cols = np.array([0, 0, 0, 1, 1, 2, 2])  # 0=AAPL, 1=MSFT, 2=GOOGL
-        >>> 
-        >>> # 构建索引
-        >>> ranges = vbt.records.nb.col_range_nb(trade_cols, 3)
-        >>> 
-        >>> # 只选择AAPL和GOOGL的交易
-        >>> selected_stocks = np.array([0, 2])  # AAPL和GOOGL
-        >>> trade_indices, new_trade_cols = vbt.records.nb.col_range_select_nb(ranges, selected_stocks)
-        >>> 
-        >>> selected_prices = trade_prices[trade_indices]
-        >>> print(f"\\n选择的交易价格: {selected_prices}")
-        >>> print(f"对应的新列编号: {new_trade_cols}")
-        
-        >>> # 验证结果
-        >>> print("\\n按新列分组的交易:")
-        >>> for col in np.unique(new_trade_cols):
-        ...     mask = new_trade_cols == col
-        ...     print(f"列{col}: {selected_prices[mask]}")
     
     性能特点：
         - 时间复杂度：O(m)，其中m是选择后的记录总数
@@ -360,45 +320,8 @@ def record_col_range_select_nb(records: tp.RecordArray, col_range: tp.ColRange,
         >>> # 选择股票0和股票2的交易记录
         >>> selected_cols = np.array([0, 2])
         >>> selected_trades = vbt.records.nb.record_col_range_select_nb(trades, col_range, selected_cols)
-        >>> 
-        >>> print("选择后的交易记录:")
-        >>> for i, trade in enumerate(selected_trades):
-        ...     print(f"记录{i}: 列={trade['col']}, 时间={trade['idx']}, "
-        ...           f"价格={trade['price']}, 数量={trade['size']}, 方向={trade['side']}")
-        
-        >>> # 量化应用：组合优化中的资产选择
-        >>> # 假设有持仓记录
-        >>> position_dtype = np.dtype([
-        ...     ('col', np.int64),        # 资产编号
-        ...     ('timestamp', np.int64),  # 时间戳
-        ...     ('shares', np.float64),   # 持股数量
-        ...     ('value', np.float64),    # 持仓价值
-        ...     ('weight', np.float64)    # 组合权重
-        ... ])
-        >>> 
-        >>> positions = np.array([
-        ...     (0, 100, 1000, 100000, 0.5),  # 资产0
-        ...     (0, 101, 1050, 105000, 0.52), # 资产0
-        ...     (1, 100, 2000, 50000, 0.25),  # 资产1
-        ...     (1, 101, 1900, 47500, 0.24),  # 资产1
-        ...     (2, 100, 800, 50000, 0.25),   # 资产2
-        ...     (2, 101, 820, 51250, 0.26),   # 资产2
-        ... ], dtype=position_dtype)
-        >>> 
-        >>> # 重新构建索引（因为数据结构不同）
-        >>> pos_col_arr = positions['col']
-        >>> pos_col_range = vbt.records.nb.col_range_nb(pos_col_arr, 3)
-        >>> 
-        >>> # 选择表现最好的资产（假设是资产0和资产2）
-        >>> best_assets = np.array([0, 2])
-        >>> selected_positions = vbt.records.nb.record_col_range_select_nb(
-        ...     positions, pos_col_range, best_assets
-        ... )
-        >>> 
-        >>> print("\\n选择的持仓记录:")
-        >>> for pos in selected_positions:
-        ...     print(f"资产{pos['col']}: 时间{pos['timestamp']}, "
-        ...           f"价值{pos['value']:.0f}, 权重{pos['weight']:.2%}")
+        >>> print(f"选择后的交易记录: {selected_trades}") 
+        # [(0, 0, 100.0, 100, 1), (1, 0, 50.0, 200, 1), (2, 1, 25.0, 400, 1)]
     
     性能优势：
         - 比传统的pandas选择操作快10-50倍
@@ -469,8 +392,8 @@ def col_map_nb(col_arr: tp.Array1d, n_cols: int) -> tp.ColMap:
     
     返回值：
         tp.ColMap: 包含(col_idxs, col_lens)的元组
-            - col_idxs: 按列分组的索引数组
-            - col_lens: 每列的记录数量
+            - col_idxs: 按列分组的索引数组 [列0的所有索引，列1的所有索引，列2的所有索引，...]
+            - col_lens: 每列的记录数量 [列0的记录数量, 列1的记录数量, 列2的记录数量，...]
     
     使用示例：
         >>> import numpy as np
@@ -484,35 +407,6 @@ def col_map_nb(col_arr: tp.Array1d, n_cols: int) -> tp.ColMap:
         >>> col_idxs, col_lens = vbt.records.nb.col_map_nb(col_arr, n_cols)
         >>> print(f"列长度: {col_lens}")      # [3, 2, 2] - 列0有3个，列1有2个，列2有2个
         >>> print(f"映射索引: {col_idxs}")    # [1, 3, 6, 2, 5, 0, 4] - 按列分组的原始索引
-        
-        >>> # 验证映射结果
-        >>> col_start_idxs = np.cumsum(col_lens) - col_lens
-        >>> for col in range(n_cols):
-        ...     start_idx = col_start_idxs[col]
-        ...     col_len = col_lens[col]
-        ...     original_indices = col_idxs[start_idx:start_idx + col_len]
-        ...     print(f"列{col}的原始索引: {original_indices}")
-        ...     print(f"  对应的列值: {col_arr[original_indices]}")
-        
-        >>> # 量化应用：实时交易数据的分组处理
-        >>> # 模拟实时到达的交易数据
-        >>> trade_times = np.array([1001, 1003, 1002, 1005, 1004, 1006, 1007])  # 时间戳
-        >>> trade_stocks = np.array([2, 0, 1, 0, 2, 1, 0])    # 对应的股票编号
-        >>> trade_prices = np.array([25.1, 100.2, 50.3, 100.5, 25.0, 50.8, 101.0])
-        >>> 
-        >>> # 为乱序数据构建映射
-        >>> stock_idxs, stock_lens = vbt.records.nb.col_map_nb(trade_stocks, 3)
-        >>> 
-        >>> print("\\n按股票分组的交易数据:")
-        >>> stock_starts = np.cumsum(stock_lens) - stock_lens
-        >>> for stock in range(3):
-        ...     start = stock_starts[stock]
-        ...     length = stock_lens[stock]
-        ...     if length > 0:
-        ...         indices = stock_idxs[start:start + length]
-        ...         print(f"股票{stock}:")
-        ...         for idx in indices:
-        ...             print(f"  时间{trade_times[idx]}: 价格{trade_prices[idx]}")
     
     性能特点：
         - 时间复杂度：O(n)，其中n是col_arr的长度
@@ -570,17 +464,9 @@ def col_map_select_nb(col_map: tp.ColMap, new_cols: tp.Array1d) -> tp.Tuple[tp.A
         >>> selected_idxs, new_cols = vbt.records.nb.col_map_select_nb(
         ...     (stock_idxs, stock_lens), selected_stocks
         ... )
-        >>> 
-        >>> print("选择的交易:")
-        >>> selected_prices = trade_prices[selected_idxs]
-        >>> selected_times = trade_times[selected_idxs]
-        >>> for i, (price, time, col) in enumerate(zip(selected_prices, selected_times, new_cols)):
-        ...     print(f"交易{i}: 新列{col}, 时间{time}, 价格{price}")
-    
-    性能特点：
-        - 适用于未排序的动态数据
-        - 与col_range_select_nb性能相当
-        - 支持实时数据流的高效处理
+        >>> print(selected_idxs) # [1 3 6 0 4]
+        >>> print(new_cols) # [0 0 0 1 1]
+
     """
     # 解构列映射
     col_idxs, col_lens = col_map
@@ -692,13 +578,6 @@ def is_col_sorted_nb(col_arr: tp.Array1d) -> bool:
         >>> 
         >>> print(f"已排序: {vbt.records.nb.is_col_sorted_nb(sorted_cols)}")     # True
         >>> print(f"未排序: {vbt.records.nb.is_col_sorted_nb(unsorted_cols)}")   # False
-        
-        >>> # 量化应用：数据验证
-        >>> trade_data = np.array([0, 0, 1, 2, 1])  # 交易数据的列编号
-        >>> if vbt.records.nb.is_col_sorted_nb(trade_data):
-        ...     print("可以使用col_range_nb进行快速索引")
-        ... else:
-        ...     print("需要先排序或使用col_map_nb")
     
     性能特点：
         - 时间复杂度：O(n)，最坏情况下需要检查所有元素
@@ -744,33 +623,11 @@ def is_col_idx_sorted_nb(col_arr: tp.Array1d, id_arr: tp.Array1d) -> bool:
         >>> # 列内索引乱序
         >>> bad_idxs = np.array([1, 5, 3, 2, 4, 6])  # 列0内索引乱序：1,5,3
         >>> print(f"复合排序错误: {vbt.records.nb.is_col_idx_sorted_nb(cols, bad_idxs)}")  # False
-        
-        >>> # 量化应用：交易记录的时间顺序验证
-        >>> trade_stocks = np.array([0, 0, 1, 1, 1])     # 股票编号
-        >>> trade_times = np.array([100, 105, 102, 108, 110])  # 交易时间
-        >>> 
-        >>> if vbt.records.nb.is_col_idx_sorted_nb(trade_stocks, trade_times):
-        ...     print("交易记录按股票和时间正确排序")
-        ... else:
-        ...     print("交易记录需要重新排序")
-        
-        >>> # 创建正确排序的示例
-        >>> print("\\n正确排序的交易记录:")
-        >>> sorted_stocks = np.array([0, 0, 0, 1, 1])
-        >>> sorted_times = np.array([100, 102, 105, 108, 110])
-        >>> is_sorted = vbt.records.nb.is_col_idx_sorted_nb(sorted_stocks, sorted_times)
-        >>> print(f"排序正确: {is_sorted}")
     
     算法逻辑：
         - 检查相邻记录的列号是否非递减
         - 当列号相同时，检查索引号是否严格递增
         - 符合词典序排序的标准
-    
-    应用场景：
-        - 交易记录的时间序列完整性验证
-        - 多资产数据的排序状态检查
-        - 回测系统的数据质量保证
-        - 实时数据流的顺序验证
     """
     # 遍历数组，检查复合键的排序状态
     for i in range(len(col_arr) - 1):
@@ -811,60 +668,6 @@ def mapped_to_mask_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
     返回值：
         tp.Array1d: 与mapped_arr相同形状的布尔掩码数组
     
-    使用示例：
-        >>> import numpy as np
-        >>> import vectorbt as vbt
-        
-        >>> # 创建示例数据：多股票的价格数据
-        >>> prices = np.array([100.5, 101.2, 99.8, 50.3, 51.1, 48.9, 25.7, 26.1])
-        >>> stocks = np.array([0, 0, 0, 1, 1, 1, 2, 2])  # 股票分组
-        >>> 
-        >>> # 构建列映射
-        >>> col_idxs, col_lens = vbt.records.nb.col_map_nb(stocks, 3)
-        >>> 
-        >>> # 定义映射函数：选择每只股票价格最高的记录
-        >>> def select_max_price_nb(inout, idxs, col, values):
-        ...     max_idx = np.argmax(values)
-        ...     inout[idxs[max_idx]] = True
-        >>> 
-        >>> # 应用映射转换
-        >>> mask = vbt.records.nb.mapped_to_mask_nb(
-        ...     prices, (col_idxs, col_lens), select_max_price_nb
-        ... )
-        >>> print(f"价格数组: {prices}")
-        >>> print(f"选择掩码: {mask}")
-        >>> print(f"最高价格: {prices[mask]}")
-        
-        >>> # 量化应用：交易信号生成
-        >>> returns = np.array([0.02, -0.01, 0.03, 0.01, -0.02, 0.04, -0.01, 0.02])
-        >>> assets = np.array([0, 0, 0, 1, 1, 1, 2, 2])
-        >>> 
-        >>> # 构建资产映射
-        >>> asset_map = vbt.records.nb.col_map_nb(assets, 3)
-        >>> 
-        >>> # 选择正收益的交易记录
-        >>> def select_positive_returns_nb(inout, idxs, col, values):
-        ...     positive_mask = values > 0
-        ...     inout[idxs[positive_mask]] = True
-        >>> 
-        >>> positive_mask = vbt.records.nb.mapped_to_mask_nb(
-        ...     returns, asset_map, select_positive_returns_nb
-        ... )
-        >>> print(f"\\n收益率: {returns}")
-        >>> print(f"正收益掩码: {positive_mask}")
-        >>> print(f"正收益值: {returns[positive_mask]}")
-    
-    性能特点：
-        - 按列并行处理，充分利用现代CPU特性
-        - 支持复杂的用户定义筛选逻辑
-        - 内存高效，只分配必要的布尔数组
-        - 适用于大规模金融数据的实时筛选
-    
-    应用场景：
-        - 技术分析中的信号筛选
-        - 风险管理中的条件过滤
-        - 策略优化中的参数选择
-        - 实时交易中的机会识别
     """
     # 解构列映射信息
     col_idxs, col_lens = col_map
@@ -884,6 +687,7 @@ def mapped_to_mask_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
         ridxs = col_idxs[col_start_idx:col_start_idx + col_len]
         
         # 应用用户定义的映射函数
+        # ridxs 是当前列的记录索引，col 是当前列号，mapped_arr[ridxs] 是当前列的数值
         inout_map_func_nb(inout, ridxs, col, mapped_arr[ridxs], *args)
     
     return inout
@@ -903,18 +707,6 @@ def top_n_inout_map_nb(inout: tp.Array1d, idxs: tp.Array1d, col: int, mapped_arr
         col (int): 当前列号（在此函数中未使用）
         mapped_arr (tp.Array1d): 当前列的数值
         n (int): 要选择的元素数量
-    
-    使用示例：
-        >>> # 选择每只股票收益率最高的2个记录
-        >>> returns = np.array([0.02, 0.05, 0.01, 0.03, 0.08, 0.04])
-        >>> stocks = np.array([0, 0, 0, 1, 1, 1])
-        >>> 
-        >>> col_map = vbt.records.nb.col_map_nb(stocks, 2)
-        >>> top_2_mask = vbt.records.nb.mapped_to_mask_nb(
-        ...     returns, col_map, vbt.records.nb.top_n_inout_map_nb, 2
-        ... )
-        >>> print(f"前2高收益掩码: {top_2_mask}")
-        >>> print(f"选中的收益: {returns[top_2_mask]}")
     
     算法实现：
         - 使用np.argsort对值进行排序
@@ -946,18 +738,6 @@ def bottom_n_inout_map_nb(inout: tp.Array1d, idxs: tp.Array1d, col: int, mapped_
         mapped_arr (tp.Array1d): 当前列的数值
         n (int): 要选择的元素数量
     
-    使用示例：
-        >>> # 选择每只股票风险最低的2个记录
-        >>> volatility = np.array([0.15, 0.08, 0.20, 0.12, 0.05, 0.18])
-        >>> stocks = np.array([0, 0, 0, 1, 1, 1])
-        >>> 
-        >>> col_map = vbt.records.nb.col_map_nb(stocks, 2)
-        >>> low_risk_mask = vbt.records.nb.mapped_to_mask_nb(
-        ...     volatility, col_map, vbt.records.nb.bottom_n_inout_map_nb, 2
-        ... )
-        >>> print(f"低风险掩码: {low_risk_mask}")
-        >>> print(f"选中的波动率: {volatility[low_risk_mask]}")
-    
     算法实现：
         - 使用np.argsort对值进行排序
         - 选择排序后的前N个元素（最小值）
@@ -984,31 +764,6 @@ def apply_on_mapped_nb(mapped_arr: tp.Array1d, col_map: tp.ColMap,
     
     返回值：
         tp.Array1d: 与输入数组相同形状的变换后数组
-    
-    使用示例：
-        >>> # 对每列进行标准化处理
-        >>> def standardize_nb(idxs, col, values):
-        ...     mean_val = np.mean(values)
-        ...     std_val = np.std(values)
-        ...     if std_val > 0:
-        ...         return (values - mean_val) / std_val
-        ...     else:
-        ...         return np.zeros_like(values)
-        >>> 
-        >>> prices = np.array([100, 101, 99, 50, 51, 49])
-        >>> stocks = np.array([0, 0, 0, 1, 1, 1])
-        >>> col_map = vbt.records.nb.col_map_nb(stocks, 2)
-        >>> 
-        >>> standardized = vbt.records.nb.apply_on_mapped_nb(
-        ...     prices, col_map, standardize_nb
-        ... )
-        >>> print(f"标准化后: {standardized}")
-    
-    应用场景：
-        - 数据标准化和归一化
-        - 技术指标的计算
-        - 收益率的变换
-        - 风险调整指标的计算
     """
     # 解构列映射信息
     col_idxs, col_lens = col_map
@@ -1048,24 +803,6 @@ def apply_on_records_nb(records: tp.RecordArray, col_map: tp.ColMap,
     返回值：
         tp.Array1d: 与记录数组相同长度的计算结果数组
     
-    使用示例：
-        >>> # 计算每列交易的平均收益
-        >>> def avg_profit_nb(col_records):
-        ...     if len(col_records) > 0:
-        ...         return np.mean(col_records['profit'])
-        ...     else:
-        ...         return 0.0
-        >>> 
-        >>> # 应用到交易记录上
-        >>> avg_profits = vbt.records.nb.apply_on_records_nb(
-        ...     trade_records, col_map, avg_profit_nb
-        ... )
-    
-    应用场景：
-        - 交易统计的计算
-        - 持仓指标的分析
-        - 风险指标的评估
-        - 绩效指标的计算
     """
     # 解构列映射信息
     col_idxs, col_lens = col_map
@@ -1103,19 +840,6 @@ def map_records_nb(records: tp.RecordArray, map_func_nb: tp.RecordMapFunc[float]
     返回值：
         tp.Array1d: 与记录数组相同长度的映射结果数组
     
-    使用示例：
-        >>> # 计算每笔交易的收益率
-        >>> def trade_return_nb(trade_record):
-        ...     return (trade_record['exit_price'] - trade_record['entry_price']) / trade_record['entry_price']
-        >>> 
-        >>> returns = vbt.records.nb.map_records_nb(trades, trade_return_nb)
-        >>> print(f"交易收益率: {returns}")
-    
-    应用场景：
-        - 简单指标的快速计算
-        - 记录字段的提取和转换
-        - 条件判断的数值化
-        - 分类数据的编码
     """
     # 创建输出数组
     out = np.empty(records.shape[0], dtype=np.float64)
@@ -1160,16 +884,6 @@ def is_mapped_expandable_nb(col_arr: tp.Array1d, idx_arr: tp.Array1d, target_sha
         >>> conflict_rows = np.array([0, 0, 0, 1])  # 位置(0,0)和(0,1)各有两个值
         >>> can_expand = vbt.records.nb.is_mapped_expandable_nb(cols, conflict_rows, shape)
         >>> print(f"可以扩展: {can_expand}")  # False，存在冲突
-    
-    算法实现：
-        - 创建临时矩阵用于冲突检测
-        - 遍历所有位置，检查是否已被占用
-        - 发现冲突立即返回False
-    
-    应用场景：
-        - 数据扩展前的完整性验证
-        - 稀疏数据结构的冲突检测
-        - 时间序列数据的位置验证
     """
     # 创建临时矩阵用于冲突检测
     temp = np.zeros(target_shape)

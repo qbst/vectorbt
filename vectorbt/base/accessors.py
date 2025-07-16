@@ -25,7 +25,7 @@ BaseAccessorT = tp.TypeVar("BaseAccessorT", bound="BaseAccessor")
 @attach_unary_magic_methods(lambda self, np_func: self.apply(apply_func=np_func))
 class BaseAccessor(Wrapping):
     """
-    pandas Series和DataFrame的基础访问器类
+    pandas Series和DataFrame 的基础访问器类
     
     该类是vectorbt框架中所有访问器的基类，为pandas对象提供高性能的数组操作和量化分析功能。
     通过pandas的访问器机制（pd.Series.vbt和pd.DataFrame.vbt），用户可以无缝使用vectorbt

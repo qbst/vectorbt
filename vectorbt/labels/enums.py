@@ -17,12 +17,6 @@ VECTORBT LABELS MODULE: 枚举类型定义 (Enumerations)
 3. **语义清晰**：枚举名称直观地反映了其功能和用途
 4. **扩展性**：便于添加新的模式和配置选项
 
-技术实现特点：
-- 使用tp.NamedTuple作为基类，确保Numba编译兼容性
-- 枚举值从0开始的整数序列，便于数组索引和条件判断
-- 通过__pdoc__字典提供详细的文档说明，支持自动文档生成
-- 集成vectorbt.utils.docs模块，提供JSON格式的文档展示
-
 枚举类型分类：
 【趋势模式枚举 (TrendMode)】
 - Binary: 二进制趋势标签，用于简单的上涨/下跌分类
@@ -30,18 +24,6 @@ VECTORBT LABELS MODULE: 枚举类型定义 (Enumerations)
 - BinaryContSat: 饱和连续标签，包含阈值饱和处理
 - PctChange: 百分比变化标签，计算实际收益率
 - PctChangeNorm: 标准化百分比变化，提供对称性
-
-应用场景：
-- 机器学习模型训练：为不同类型的预测任务选择合适的标签模式
-- 量化策略开发：根据策略需求选择相应的趋势识别模式
-- 回测分析：使用不同模式分析策略在各种市场条件下的表现
-- 风险管理：基于不同趋势模式进行风险评估和控制
-
-与其他模块的关系：
-- labels.nb模块：各种标签生成算法的底层实现
-- labels.generators模块：标签生成器的高层接口
-- indicators.factory模块：指标工厂的参数配置
-- utils.enum_模块：枚举映射和转换工具
 
 使用示例：
 ```python

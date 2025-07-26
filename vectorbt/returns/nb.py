@@ -1436,53 +1436,426 @@ def rolling_calmar_ratio_nb(returns: tp.Array2d,
         returns, window, minp, _apply_func_nb, ann_factor)
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba JIT编译优化，启用缓存提高重复计算性能
 def omega_ratio_1d_nb(returns: tp.Array1d,
                       ann_factor: float,
                       risk_free: float = 0.,
                       required_return: float = 0.) -> float:
-    """Omega ratio of a strategy.."""
+    """
+    一维欧米伽比率计算函数 - 衡量投资策略风险调整后收益的高级指标
+    
+    欧米伽比率是一种基于收益分布的风险调整绩效指标，由Keating和Shadwick在2002年提出。
+    它通过比较超过目标收益率的收益总和与低于目标收益率的损失总和，全面考虑了收益分布
+    的所有矩信息，比夏普比率等传统指标更加全面。
+    
+    数学原理：
+        Omega(τ) = ∫[τ,∞] [1-F(r)]dr / ∫[-∞,τ] F(r)dr
+        
+        简化为离散形式：
+        Omega = Σ(超额收益) / |Σ(负超额收益)|
+        
+        其中τ为目标收益率阈值（required_return）
+    
+    参数说明：
+        returns (tp.Array1d): 一维收益率时间序列
+            - 可以是日频、周频、月频等任意频率的收益率数据
+            - 数组中的每个元素代表一个时期的收益率（小数形式）
+            - 例如：[0.02, -0.01, 0.015, -0.005, 0.01] 表示5期收益率
+            
+        ann_factor (float): 年化因子，用于将目标收益率转换为对应频率
+            - 日频数据：252（年均交易日数）
+            - 周频数据：52（年均周数）
+            - 月频数据：12（年均月数）
+            - 特殊值1：表示不进行年化转换，直接使用required_return
+            
+        risk_free (float, 可选): 无风险收益率，默认为0
+            - 应与returns的频率保持一致
+            - 日频数据：年化无风险利率/252
+            - 例如：年化3%的无风险利率，日频为0.03/252≈0.000119
+            
+        required_return (float, 可选): 目标年化收益率，默认为0
+            - 投资者期望的最低年化收益率水平
+            - 例如：0.08表示期望8%的年化收益率
+            - 该值会根据ann_factor自动转换为对应频率的阈值
+    
+    返回值：
+        float: 欧米伽比率值
+            - 大于1：表示策略表现优于目标收益率，值越大越好
+            - 等于1：表示策略刚好达到目标收益率
+            - 小于1：表示策略表现低于目标收益率
+            - 无穷大：表示没有负超额收益，策略完美
+    
+    使用示例：
+        >>> import numpy as np
+        >>> # 示例1：基本使用 - 月度收益率数据
+        >>> monthly_returns = np.array([0.02, -0.01, 0.03, -0.005, 0.015, 0.01])
+        >>> omega = omega_ratio_1d_nb(monthly_returns, 12.0, 0.0, 0.08)
+        >>> print(f"欧米伽比率: {omega:.3f}")
+        
+        >>> # 示例2：包含无风险利率的计算
+        >>> daily_returns = np.array([0.001, -0.002, 0.003, 0.0, -0.001])
+        >>> risk_free_daily = 0.03 / 252  # 年化3%转为日频
+        >>> omega = omega_ratio_1d_nb(daily_returns, 252.0, risk_free_daily, 0.10)
+        >>> print(f"考虑无风险利率的欧米伽比率: {omega:.3f}")
+        
+        >>> # 示例3：不进行年化转换
+        >>> period_returns = np.array([0.05, -0.02, 0.08, -0.01, 0.03])
+        >>> omega = omega_ratio_1d_nb(period_returns, 1.0, 0.0, 0.02)
+        >>> print(f"期间欧米伽比率: {omega:.3f}")
+    
+    计算步骤详解：
+        1. 根据年化因子计算期间目标收益率阈值
+        2. 计算调整后的超额收益序列（扣除无风险利率和目标收益率）
+        3. 分别累加正超额收益和负超额收益
+        4. 计算欧米伽比率 = 正超额收益总和 / |负超额收益总和|
+    
+    应用场景：
+        - 对冲基金绩效评估：全面评估基金的风险调整收益
+        - 投资组合优化：作为优化目标函数的一部分
+        - 策略比较：比较不同投资策略的综合表现
+        - 风险管理：识别具有良好收益分布特征的策略
+    
+    注意事项：
+        - 欧米伽比率考虑了收益分布的所有信息，比夏普比率更全面
+        - 当没有负超额收益时返回无穷大，表示策略完美
+        - 年化因子必须大于-1，否则返回NaN
+        - 该指标对极端值敏感，适合评估收益分布的尾部特征
+    """
+    # 处理年化因子的特殊情况
     if ann_factor == 1:
+        # 年化因子为1时，直接使用目标收益率，不进行频率转换
         return_threshold = required_return
     elif ann_factor <= -1:
+        # 年化因子小于等于-1时，数学上无意义，返回NaN
         return np.nan
     else:
+        # 将年化目标收益率转换为对应频率的期间收益率阈值
+        # 公式：期间收益率 = (1 + 年化收益率)^(1/年化因子) - 1
         return_threshold = (1 + required_return) ** (1. / ann_factor) - 1
+    
+    # 计算调整后的超额收益序列
+    # 从收益率中同时扣除无风险利率和目标收益率阈值
     returns_less_thresh = returns - risk_free - return_threshold
+    
+    # 计算分子：所有正超额收益的总和
+    # 只统计超过目标收益率的部分，代表"收益"
     numer = np.sum(returns_less_thresh[returns_less_thresh > 0.0])
+    
+    # 计算分母：所有负超额收益的绝对值总和
+    # 统计低于目标收益率的部分，代表"损失"，取绝对值
     denom = -1.0 * np.sum(returns_less_thresh[returns_less_thresh < 0.0])
+    
+    # 处理分母为零的特殊情况
     if denom == 0.:
+        # 没有负超额收益时，表示策略完美，返回无穷大
         return np.inf
+    
+    # 返回欧米伽比率：正超额收益总和 / 负超额收益绝对值总和
     return numer / denom
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba JIT编译优化，启用缓存提高批量计算性能
 def omega_ratio_nb(returns: tp.Array2d,
                    ann_factor: float,
                    risk_free: float = 0.,
                    required_return: float = 0.) -> tp.Array1d:
-    """2-dim version of `omega_ratio_1d_nb`."""
+    """
+    二维欧米伽比率批量计算函数 - 同时计算多个资产或策略的欧米伽比率
+    
+    这是omega_ratio_1d_nb函数的二维扩展版本，能够高效地批量计算多个投资策略
+    或资产的欧米伽比率。在投资组合管理、策略比较和风险评估中发挥重要作用，
+    特别适用于需要同时评估大量资产或策略绩效的场景。
+    
+    函数特点：
+        - 矢量化计算：利用循环对每列数据独立计算，保持计算的准确性
+        - 内存高效：预分配输出数组，避免动态内存分配的开销
+        - 类型安全：使用float64精度确保计算结果的数值稳定性
+        - 参数统一：所有资产使用相同的计算参数，便于横向比较
+    
+    参数说明：
+        returns (tp.Array2d): 二维收益率矩阵，形状为(时间点数, 资产数)
+            - 每行代表一个时间点（如交易日、周、月）
+            - 每列代表一个资产或策略的收益率时间序列
+            - 例如：形状(252, 3)表示252个交易日的3个资产收益率
+            - 数值应为小数形式，如0.02表示2%的收益率
+            
+        ann_factor (float): 年化因子，应用于所有资产
+            - 日频数据：252（年均交易日数）
+            - 周频数据：52（年均周数）  
+            - 月频数据：12（年均月数）
+            - 所有资产使用统一的年化因子以确保结果可比性
+            
+        risk_free (float, 可选): 无风险收益率，默认为0
+            - 统一的无风险利率基准，应与数据频率匹配
+            - 日频数据示例：年化3%无风险利率 = 0.03/252 ≈ 0.000119
+            - 所有资产使用相同基准以确保公平比较
+            
+        required_return (float, 可选): 目标年化收益率，默认为0
+            - 统一的业绩基准或投资者期望收益率
+            - 例如：0.10表示所有资产的目标年化收益率为10%
+            - 用于评估各资产相对于统一目标的表现
+    
+    返回值：
+        tp.Array1d: 一维数组，包含每个资产的欧米伽比率
+            - 数组长度等于输入矩阵的列数（资产数量）
+            - 每个元素对应一个资产的欧米伽比率值
+            - 值的含义与omega_ratio_1d_nb相同：>1表示优于目标，<1表示低于目标
+    
+    使用示例：
+        >>> import numpy as np
+        >>> # 示例1：三个股票策略的月度收益率比较
+        >>> monthly_returns = np.array([
+        ...     [0.02, 0.01, 0.03],    # 第1个月：策略A=2%, B=1%, C=3%
+        ...     [-0.01, 0.02, -0.005], # 第2个月：策略A=-1%, B=2%, C=-0.5%
+        ...     [0.03, -0.01, 0.025],  # 第3个月：策略A=3%, B=-1%, C=2.5%
+        ...     [0.005, 0.015, 0.01],  # 第4个月：策略A=0.5%, B=1.5%, C=1%
+        ...     [0.015, 0.008, 0.02]   # 第5个月：策略A=1.5%, B=0.8%, C=2%
+        ... ])
+        >>> omega_ratios = omega_ratio_nb(monthly_returns, 12.0, 0.0, 0.08)
+        >>> print("各策略欧米伽比率:")
+        >>> for i, ratio in enumerate(omega_ratios):
+        ...     print(f"策略{chr(65+i)}: {ratio:.3f}")
+        
+        >>> # 示例2：考虑无风险利率的多资产比较
+        >>> daily_returns = np.random.normal(0.001, 0.02, (252, 5))  # 5个资产252天
+        >>> risk_free_daily = 0.03 / 252  # 年化3%无风险利率
+        >>> omega_ratios = omega_ratio_nb(daily_returns, 252.0, risk_free_daily, 0.12)
+        >>> print(f"\\n5个资产的欧米伽比率: {omega_ratios}")
+        >>> print(f"最佳策略: 资产{np.argmax(omega_ratios)+1} (欧米伽比率: {np.max(omega_ratios):.3f})")
+        
+        >>> # 示例3：投资组合vs基准比较
+        >>> portfolio_benchmark = np.array([
+        ...     [0.008, 0.006],  # 投资组合 vs 基准指数
+        ...     [-0.012, -0.008],
+        ...     [0.015, 0.010],
+        ...     [0.003, 0.005],
+        ...     [0.018, 0.012]
+        ... ])
+        >>> omega_ratios = omega_ratio_nb(portfolio_benchmark, 252.0, 0.0, 0.10)
+        >>> print(f"\\n投资组合欧米伽比率: {omega_ratios[0]:.3f}")
+        >>> print(f"基准指数欧米伽比率: {omega_ratios[1]:.3f}")
+        >>> if omega_ratios[0] > omega_ratios[1]:
+        ...     print("投资组合表现优于基准")
+        ... else:
+        ...     print("投资组合表现低于基准")
+    
+    计算逻辑：
+        1. 预分配输出数组以存储每个资产的欧米伽比率
+        2. 遍历每一列（每个资产），调用omega_ratio_1d_nb进行计算
+        3. 所有资产使用相同的ann_factor、risk_free、required_return参数
+        4. 返回包含所有资产欧米伽比率的一维数组
+    
+    应用场景：
+        - 多策略基金管理：同时评估多个交易策略的风险调整收益
+        - 资产配置优化：比较不同资产类别的投资价值
+        - 业绩归因分析：识别投资组合中表现最佳的资产
+        - 风险预算分配：根据欧米伽比率分配资金权重
+        - 策略筛选：从大量策略中筛选出优质投资机会
+    
+    性能优势：
+        - 批量计算效率高于逐个调用omega_ratio_1d_nb
+        - Numba编译优化，执行速度接近C语言水平
+        - 内存使用优化，适合处理大规模数据集
+        - 缓存机制减少重复编译开销
+    
+    注意事项：
+        - 所有资产必须具有相同的时间长度（行数相同）
+        - 参数对所有资产统一应用，确保结果的可比性
+        - 缺失值（NaN）会影响计算结果，建议预先处理
+        - 适合用于相同频率和相同计算基准的资产比较
+    """
+    # 预分配输出数组，长度等于资产数量（列数）
+    # 使用float64精度确保数值计算的稳定性
     out = np.empty(returns.shape[1], dtype=np.float64)
+    
+    # 遍历每一列（每个资产或策略）
     for col in range(returns.shape[1]):
+        # 对当前资产调用一维欧米伽比率计算函数
+        # 提取第col列的收益率序列，保持其他参数不变
         out[col] = omega_ratio_1d_nb(
-            returns[:, col], ann_factor, risk_free, required_return)
+            returns[:, col],      # 当前资产的收益率时间序列
+            ann_factor,           # 年化因子（所有资产统一）
+            risk_free,           # 无风险利率（所有资产统一）
+            required_return      # 目标收益率（所有资产统一）
+        )
+    
+    # 返回包含所有资产欧米伽比率的一维数组
     return out
 
 
-@njit
+@njit  # Numba JIT编译优化，专门为滚动窗口计算设计
 def rolling_omega_ratio_nb(returns: tp.Array2d,
                            window: int,
                            minp: tp.Optional[int],
                            ann_factor: float,
                            risk_free: float = 0.,
                            required_return: float = 0.) -> tp.Array2d:
-    """Rolling version of `omega_ratio_nb`."""
-
+    """
+    滚动欧米伽比率计算函数 - 计算指定时间窗口内的动态欧米伽比率
+    
+    该函数实现了欧米伽比率的滚动窗口计算，能够动态跟踪投资策略在不同时期的
+    风险调整收益表现。通过滑动时间窗口，可以观察策略绩效的时间变化趋势，
+    识别策略的稳定性和一致性，是动态风险管理和实时监控的重要工具。
+    
+    滚动计算原理：
+        - 对于每个时间点t，计算[t-window+1, t]区间内的欧米伽比率
+        - 窗口向前滑动，形成连续的欧米伽比率时间序列
+        - 早期数据点由于窗口不足可能返回NaN（取决于minp设置）
+    
+    函数特点：
+        - 时间动态性：捕捉策略绩效的时间变化特征
+        - 多资产支持：同时处理多个资产的滚动计算
+        - 灵活窗口：支持自定义窗口大小和最小观测期要求
+        - 高性能：基于generic_nb.rolling_apply_nb的优化实现
+        - 内存高效：流式计算，避免存储所有中间结果
+    
+    参数说明：
+        returns (tp.Array2d): 二维收益率矩阵，形状为(时间点数, 资产数)
+            - 每行代表一个时间点的收益率数据
+            - 每列代表一个资产或策略的完整时间序列
+            - 时间序列应按时间顺序排列（从早到晚）
+            - 数值为小数形式，如0.01表示1%收益率
+            
+        window (int): 滚动窗口大小（时间点数）
+            - 计算欧米伽比率时使用的历史数据长度
+            - 较大窗口：结果更稳定但响应滞后
+            - 较小窗口：响应灵敏但可能波动较大
+            - 常用设置：日频数据20-60天，月频数据6-24个月
+            
+        minp (tp.Optional[int]): 窗口内所需的最小有效观测数，可选
+            - None：使用window作为最小观测数（严格窗口）
+            - 整数值：允许窗口内有缺失值，但至少需要minp个有效值
+            - 设置较小值可以更早开始计算，但可能影响结果稳定性
+            - 建议设置为window的50%-80%
+            
+        ann_factor (float): 年化因子，用于所有窗口计算
+            - 日频数据：252（年均交易日数）
+            - 周频数据：52（年均周数）
+            - 月频数据：12（年均月数）
+            - 保持与原始数据频率一致
+            
+        risk_free (float, 可选): 无风险收益率，默认为0
+            - 应与收益率数据的频率匹配
+            - 在所有滚动窗口中使用相同的无风险利率
+            - 日频示例：年化3%无风险利率 = 0.03/252
+            
+        required_return (float, 可选): 目标年化收益率，默认为0
+            - 投资者期望的年化收益率基准
+            - 用于评估策略是否达到预期目标
+            - 在所有滚动窗口中使用相同的目标收益率
+    
+    返回值：
+        tp.Array2d: 滚动欧米伽比率矩阵，形状与输入相同
+            - 每行对应一个时间点的欧米伽比率值
+            - 每列对应一个资产的滚动欧米伽比率时间序列
+            - 前面的值可能为NaN（窗口大小不足时）
+            - 数值含义与静态欧米伽比率相同
+    
+    使用示例：
+        >>> import numpy as np
+        >>> # 示例1：股票策略的滚动欧米伽比率分析
+        >>> np.random.seed(42)
+        >>> daily_returns = np.random.normal(0.001, 0.02, (100, 2))  # 100天，2个策略
+        >>> rolling_omega = rolling_omega_ratio_nb(
+        ...     daily_returns, window=20, minp=15, ann_factor=252.0, 
+        ...     risk_free=0.03/252, required_return=0.10
+        ... )
+        >>> print(f"滚动欧米伽比率矩阵形状: {rolling_omega.shape}")
+        >>> print(f"策略1最新20日欧米伽比率: {rolling_omega[-1, 0]:.3f}")
+        >>> print(f"策略2最新20日欧米伽比率: {rolling_omega[-1, 1]:.3f}")
+        
+        >>> # 示例2：月度数据的季度滚动分析
+        >>> monthly_returns = np.array([
+        ...     [0.02, 0.015, 0.025],   # 3个基金的月度收益率
+        ...     [0.01, -0.005, 0.018],
+        ...     [-0.008, 0.022, -0.012],
+        ...     [0.025, 0.008, 0.030],
+        ...     [0.012, 0.015, 0.008],
+        ...     [0.018, -0.002, 0.022],
+        ...     [0.005, 0.020, 0.015],
+        ...     [-0.003, 0.012, -0.005],
+        ...     [0.028, 0.006, 0.035]
+        ... ])
+        >>> rolling_omega = rolling_omega_ratio_nb(
+        ...     monthly_returns, window=6, minp=4, ann_factor=12.0,
+        ...     risk_free=0.0, required_return=0.08
+        ... )
+        >>> print("\\n各基金6个月滚动欧米伽比率:")
+        >>> for i in range(3):
+        ...     latest_ratio = rolling_omega[-1, i]
+        ...     print(f"基金{i+1}: {latest_ratio:.3f}")
+        
+        >>> # 示例3：策略稳定性分析
+        >>> # 计算欧米伽比率的标准差来评估策略稳定性
+        >>> omega_std = np.nanstd(rolling_omega, axis=0)
+        >>> print(f"\\n各策略欧米伽比率波动性:")
+        >>> for i, std in enumerate(omega_std):
+        ...     print(f"策略{i+1}标准差: {std:.3f} ({'稳定' if std < 0.5 else '波动'})")
+    
+    计算流程：
+        1. 定义内部应用函数_apply_func_nb，封装omega_ratio_1d_nb调用
+        2. 调用generic_nb.rolling_apply_nb执行滚动窗口计算
+        3. 对每个窗口位置和每个资产独立计算欧米伽比率
+        4. 返回完整的滚动欧米伽比率时间序列矩阵
+    
+    应用场景：
+        - 策略监控：实时跟踪交易策略的风险调整收益变化
+        - 绩效评估：识别策略表现的周期性变化和趋势
+        - 风险管理：动态调整仓位和风险敞口
+        - 策略选择：比较不同策略的稳定性和一致性
+        - 市场择时：识别策略适用的市场环境
+        - 组合优化：动态调整资产配置权重
+    
+    分析技巧：
+        - 趋势分析：观察滚动欧米伽比率的上升或下降趋势
+        - 稳定性评估：计算滚动值的标准差或变异系数
+        - 阈值监控：设置预警线，当比率低于某值时发出信号
+        - 相对比较：比较多个策略的滚动表现差异
+        - 周期识别：寻找欧米伽比率的周期性变化模式
+    
+    性能特点：
+        - 高效滚动：利用优化的滚动窗口算法，避免重复计算
+        - 内存友好：流式处理，不需要存储所有历史窗口数据
+        - 并行友好：每个资产的计算相互独立，支持并行化
+        - 数值稳定：处理边界条件和异常值，确保计算稳定性
+    
+    注意事项：
+        - 窗口大小影响结果的稳定性和响应速度，需要权衡选择
+        - 早期时间点可能因数据不足而返回NaN
+        - 建议结合其他指标综合评估策略表现
+        - 滚动结果具有时间依赖性，适合趋势分析而非静态比较
+    """
+    # 定义内部应用函数，用于在每个滚动窗口中计算欧米伽比率
+    # 该函数会被generic_nb.rolling_apply_nb在每个窗口位置调用
     def _apply_func_nb(i, col, _returns, _ann_factor, _risk_free, _required_return):
+        """
+        滚动窗口内的欧米伽比率计算函数
+        
+        参数说明：
+            i (int): 当前窗口的结束位置索引（由rolling_apply_nb自动传入）
+            col (int): 当前处理的资产列索引（由rolling_apply_nb自动传入）
+            _returns (tp.Array1d): 当前窗口内的收益率数据切片
+            _ann_factor (float): 年化因子
+            _risk_free (float): 无风险收益率
+            _required_return (float): 目标收益率
+        
+        返回值：
+            float: 当前窗口的欧米伽比率值
+        """
+        # 调用一维欧米伽比率计算函数处理窗口内数据
         return omega_ratio_1d_nb(_returns, _ann_factor, _risk_free, _required_return)
 
+    # 调用通用滚动应用函数执行滚动窗口计算
+    # 该函数会自动处理窗口滑动、边界条件、缺失值等复杂逻辑
     return generic_nb.rolling_apply_nb(
-        returns, window, minp, _apply_func_nb, ann_factor, risk_free, required_return)
+        returns,              # 输入的收益率矩阵
+        window,               # 滚动窗口大小
+        minp,                 # 最小观测期数要求
+        _apply_func_nb,       # 在每个窗口中应用的计算函数
+        ann_factor,           # 传递给计算函数的年化因子参数
+        risk_free,            # 传递给计算函数的无风险利率参数
+        required_return       # 传递给计算函数的目标收益率参数
+    )
 
 
 @njit(cache=True)  # Numba编译优化，启用缓存

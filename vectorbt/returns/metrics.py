@@ -18,27 +18,10 @@ VectorBT收益率高级统计度量模块
     - 紧缩夏普比率计算：校正多重假设检验偏差，评估策略的真实统计显著性
     - 统计推断支持：为策略回测结果提供严格的统计显著性验证
 
-应用场景：
-    - **量化研究验证**：验证策略回测结果的统计显著性
-    - **多策略筛选**：在大量策略中识别真正具有超额收益能力的策略
-    - **过拟合检测**：识别和避免策略开发中的过度优化问题
-    - **学术研究**：为金融学术研究提供严格的统计推断工具
-    - **监管报告**：满足监管机构对策略有效性统计验证的要求
-
 理论基础：
     本模块基于Bailey和López de Prado等学者的研究成果，结合极值理论、
     多重假设检验理论和非参数统计学方法，为量化投资提供理论严谨的
     绩效评估框架。
-
-技术特点：
-    - 使用SciPy统计库实现高精度统计计算
-    - 支持向量化操作，适合大规模策略批量分析
-    - 提供灵活的参数配置，适应不同的研究场景
-    - 与vectorbt生态系统无缝集成
-
-注意事项：
-    这些高级统计指标需要足够的历史数据和合理的参数设置才能产生可靠结果，
-    建议结合领域专家知识和统计学理论进行正确解释和应用。
 """
 
 import numpy as np  # 导入NumPy库，用于数值计算和数组操作
@@ -305,8 +288,7 @@ def deflated_sharpe_ratio(*, est_sharpe: tp.Array1d, var_sharpe: float, nb_trial
 
     # 第二步：计算紧缩夏普比率
     # 使用标准正态分布的累积分布函数计算统计显著性概率
-    return norm.cdf(((est_sharpe - SR0) * np.sqrt(backtest_horizon - 1)) /
-                    np.sqrt(1 - skew * est_sharpe + ((kurtosis - 1) / 4) * est_sharpe ** 2))
+    return norm.cdf(((est_sharpe - SR0) * np.sqrt(backtest_horizon - 1)) / np.sqrt(1 - skew * est_sharpe + ((kurtosis - 1) / 4) * est_sharpe ** 2))
     # 分子部分：(est_sharpe - SR0) * sqrt(T-1)
     #   - (est_sharpe - SR0)：估计夏普比率与期望最大值的差异
     #   - sqrt(backtest_horizon - 1)：时间长度的平方根，提供统计检验的功效

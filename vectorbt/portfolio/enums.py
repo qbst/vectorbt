@@ -5033,16 +5033,39 @@ if result.status == OrderStatus.Rejected:
 
 
 class AdjustSLContext(tp.NamedTuple):
-    i: int
-    col: int
-    position_now: float
-    val_price_now: float
-    init_i: int
-    init_price: float
-    curr_i: int
-    curr_price: float
-    curr_stop: float
-    curr_trail: bool
+    """
+    止损调整上下文数据结构
+    
+    用于止损订单调整函数的上下文信息，特别是跟踪止损（Trailing Stop Loss）的调整。
+    该上下文包含了调整止损所需的所有当前状态和历史信息，支持动态止损策略的实现。
+    
+    设计用途：
+    - 传递给 adjust_sl_func_nb 止损调整函数
+    - 支持跟踪止损的动态调整逻辑
+    - 提供止损调整决策所需的完整信息
+    - 记录止损设置的演变历史
+    
+    使用示例：
+    ```python
+    def adjust_sl_func_nb(context: AdjustSLContext) -> tuple[float, bool]:
+        # 跟踪止损：当价格上涨时，止损价格也相应上移
+        if context.val_price_now > context.curr_price:
+            # 新的止损价格 = 当前价格 - 固定距离
+            new_stop = context.val_price_now - 0.02  # 2%距离
+            return new_stop, True  # 更新止损价格，保持跟踪模式
+        return context.curr_stop, context.curr_trail  # 保持当前设置
+    ```
+    """
+    i: int                    # 当前行索引：当前时间步的索引位置，范围[0, target_shape[0])
+    col: int                  # 当前列索引：当前资产列的索引，范围[0, target_shape[1])，且在[from_col, to_col)内
+    position_now: float       # 当前持仓数量：当前时间点的资产持仓数量（正数多头，负数空头）
+    val_price_now: float      # 当前估值价格：当前时间点的资产估值价格，用于止损计算
+    init_i: int               # 初始止损行索引：止损首次设置时的时间步索引，保持不变
+    init_price: float         # 初始止损价格：止损首次设置时的价格基准，保持不变
+    curr_i: int               # 当前止损行索引：最近一次止损更新的时间步索引，随价格更新而变化
+    curr_price: float         # 当前止损价格：最近一次更新的止损价格，在跟踪止损中随价格上涨而上移
+    curr_stop: float          # 当前止损值：当前有效的止损价格，可由调整函数修改
+    curr_trail: bool          # 当前跟踪标志：当前是否为跟踪止损模式，可由调整函数修改
 
 
 __pdoc__['AdjustSLContext'] = "A named tuple representing the context for adjusting (trailing) stop loss."
@@ -5075,13 +5098,37 @@ Can be updated by adjustment function."""
 
 
 class AdjustTPContext(tp.NamedTuple):
-    i: int
-    col: int
-    position_now: float
-    val_price_now: float
-    init_i: int
-    init_price: float
-    curr_stop: float
+    """
+    止盈调整上下文数据结构
+    
+    用于止盈订单调整函数的上下文信息。与止损调整类似，但专门用于止盈策略的
+    动态调整。该上下文提供了止盈调整决策所需的所有必要信息。
+    
+    设计用途：
+    - 传递给 adjust_tp_func_nb 止盈调整函数
+    - 支持动态止盈策略的实现
+    - 提供止盈调整决策所需的完整信息
+    - 记录止盈设置的演变历史
+    
+    使用示例：
+    ```python
+    def adjust_tp_func_nb(context: AdjustTPContext) -> float:
+        # 动态止盈：根据持仓时间和价格变化调整止盈价格
+        price_change = context.val_price_now - context.init_price
+        if price_change > 0.05:  # 价格上涨超过5%
+            # 提高止盈价格，锁定更多利润
+            new_tp = context.val_price_now + 0.03  # 当前价格+3%
+            return new_tp
+        return context.curr_stop  # 保持当前止盈价格
+    ```
+    """
+    i: int                    # 当前行索引：当前时间步的索引位置，范围[0, target_shape[0])
+    col: int                  # 当前列索引：当前资产列的索引，范围[0, target_shape[1])，且在[from_col, to_col)内
+    position_now: float       # 当前持仓数量：当前时间点的资产持仓数量（正数多头，负数空头）
+    val_price_now: float      # 当前估值价格：当前时间点的资产估值价格，用于止盈计算
+    init_i: int               # 初始止盈行索引：止盈首次设置时的时间步索引，保持不变
+    init_price: float         # 初始止盈价格：止盈首次设置时的价格基准，保持不变
+    curr_stop: float          # 当前止盈值：当前有效的止盈价格，可由调整函数修改
 
 
 __pdoc__['AdjustTPContext'] = "A named tuple representing the context for adjusting take profit."
@@ -5095,11 +5142,38 @@ __pdoc__['AdjustTPContext.curr_stop'] = "See `AdjustSLContext.curr_stop`."
 
 
 class SignalContext(tp.NamedTuple):
-    i: int
-    col: int
-    position_now: float
-    val_price_now: float
-    flex_2d: bool
+    """
+    信号生成上下文数据结构
+    
+    用于信号生成函数的上下文信息。该上下文提供了生成交易信号所需的所有
+    当前状态信息，支持各种技术指标和策略的信号生成逻辑。
+    
+    设计用途：
+    - 传递给 signal_func_nb 信号生成函数
+    - 支持各种技术分析指标的计算
+    - 提供信号生成决策所需的完整信息
+    - 支持复杂的多条件信号逻辑
+    
+    使用示例：
+    ```python
+    def signal_func_nb(context: SignalContext) -> int:
+        # 简单的移动平均交叉策略
+        if context.position_now > 0:  # 当前持有多头仓位
+            # 检查是否应该平仓
+            if context.val_price_now < 100:  # 价格跌破100
+                return -1  # 卖出信号
+        else:  # 当前没有仓位
+            # 检查是否应该开仓
+            if context.val_price_now > 110:  # 价格突破110
+                return 1   # 买入信号
+        return 0  # 无信号
+    ```
+    """
+    i: int                    # 当前行索引：当前时间步的索引位置，范围[0, target_shape[0])
+    col: int                  # 当前列索引：当前资产列的索引，范围[0, target_shape[1])，且在[from_col, to_col)内
+    position_now: float       # 当前持仓数量：当前时间点的资产持仓数量（正数多头，负数空头）
+    val_price_now: float      # 当前估值价格：当前时间点的资产估值价格，用于信号计算
+    flex_2d: bool             # 灵活二维索引标志：是否使用灵活的二维索引选择，参见vectorbt.base.reshape_fns.flex_select_auto_nb
 
 
 __pdoc__['AdjustSLContext'] = "A named tuple representing the context for generation of signals."
@@ -5116,15 +5190,34 @@ __pdoc__['AdjustSLContext.flex_2d'] = "See `vectorbt.base.reshape_fns.flex_selec
 # ############# Records ############# #
 
 order_dt = np.dtype([
-    ('id', np.int64),        # 订单唯一标识符
-    ('col', np.int64),       # 列索引（资产索引）
-    ('idx', np.int64),       # 时间索引（行索引）
-    ('size', np.float64),    # 订单大小（实际成交数量）
-    ('price', np.float64),   # 订单价格（实际成交价格）
-    ('fees', np.float64),    # 手续费金额
-    ('side', np.int64),      # 订单方向（买入/卖出）
+    ('id', np.int64),        # 订单唯一标识符：每个订单的唯一ID，用于订单追踪和引用
+    ('col', np.int64),       # 列索引（资产索引）：订单对应的资产列索引，标识交易的具体资产
+    ('idx', np.int64),       # 时间索引（行索引）：订单执行的时间步索引，标识交易的具体时间点
+    ('size', np.float64),    # 订单大小（实际成交数量）：订单实际成交的资产数量，正数买入，负数卖出
+    ('price', np.float64),   # 订单价格（实际成交价格）：订单实际成交的价格，已包含滑点调整
+    ('fees', np.float64),    # 手续费金额：订单执行产生的总手续费，包括固定费用和比例费用
+    ('side', np.int64),      # 订单方向（买入/卖出）：订单的交易方向，0表示买入，1表示卖出
 ], align=True)
-"""订单记录数据类型，定义了订单记录的完整结构化数据格式"""
+"""订单记录数据类型，定义了订单记录的完整结构化数据格式
+
+该数据类型用于存储投资组合模拟中所有订单的详细信息，包括：
+- 订单的基本信息（ID、资产、时间）
+- 订单的执行结果（数量、价格、费用）
+- 订单的交易方向
+
+使用示例：
+```python
+# 创建订单记录数组
+order_records = np.empty(1000, dtype=order_dt)
+
+# 填充订单记录
+order_records[0] = (1, 0, 10, 100.0, 50.0, 2.5, 0)  # ID=1, 资产0, 时间10, 买入100股，价格50，手续费2.5
+
+# 分析订单记录
+buy_orders = order_records[order_records['side'] == 0]  # 筛选买入订单
+total_fees = order_records['fees'].sum()  # 计算总手续费
+```
+"""
 
 __pdoc__['order_dt'] = f"""订单记录数据类型
 
@@ -5208,24 +5301,53 @@ sell_orders = orders[orders['side'] == 1]
 """
 
 _trade_fields = [
-    ('id', np.int64),           # 交易唯一标识符
-    ('col', np.int64),          # 列索引（资产索引）
-    ('size', np.float64),       # 交易大小（持仓数量）
-    ('entry_idx', np.int64),    # 入场时间索引
-    ('entry_price', np.float64), # 平均入场价格
-    ('entry_fees', np.float64), # 入场总手续费
-    ('exit_idx', np.int64),     # 出场时间索引
-    ('exit_price', np.float64), # 平均出场价格
-    ('exit_fees', np.float64),  # 出场总手续费
-    ('pnl', np.float64),        # 盈亏金额
-    ('return', np.float64),     # 收益率
-    ('direction', np.int64),    # 交易方向（多头/空头）
-    ('status', np.int64),       # 交易状态（开放/关闭）
-    ('parent_id', np.int64)     # 父交易ID（用于关联分析）
+    ('id', np.int64),           # 交易唯一标识符：每个交易的全局唯一ID，从0开始递增，用于交易追踪和绩效分析
+    ('col', np.int64),          # 列索引（资产索引）：指示交易所属的资产列，范围[0, 资产数量-1]，用于多资产组合的交易分组
+    ('size', np.float64),       # 交易大小（持仓数量）：交易的最大持仓数量，正数表示多头交易，负数表示空头交易，反映交易的规模和风险暴露
+    ('entry_idx', np.int64),    # 入场时间索引：交易开始（首次建仓）的时间点，对应价格数据的行索引，用于计算持仓时间
+    ('entry_price', np.float64), # 平均入场价格：所有入场订单的加权平均价格，考虑了分批建仓的情况，用于计算交易盈亏的成本基础
+    ('entry_fees', np.float64), # 入场总手续费：建仓过程中产生的所有手续费总和，包括多次加仓的累计费用，影响交易净收益的成本因素
+    ('exit_idx', np.int64),     # 出场时间索引：交易结束（完全平仓）的时间点，对于未平仓交易为-1，用于计算实际持仓期间
+    ('exit_price', np.float64), # 平均出场价格：所有出场订单的加权平均价格，对于未平仓交易，使用当前估值价格，用于计算最终交易盈亏
+    ('exit_fees', np.float64),  # 出场总手续费：平仓过程中产生的所有手续费总和，包括分批平仓的累计费用，对于未平仓交易可能为0
+    ('pnl', np.float64),        # 盈亏金额：交易的绝对盈亏金额（包含手续费），计算公式：(exit_price - entry_price) * size - entry_fees - exit_fees，正数表示盈利，负数表示亏损
+    ('return', np.float64),     # 收益率：交易的相对收益率，计算公式：pnl / (entry_price * abs(size) + entry_fees)，用于标准化的绩效比较
+    ('direction', np.int64),    # 交易方向（多头/空头）：使用TradeDirection枚举值，0=Long（多头），1=Short（空头），区分交易的基本策略方向，用于方向性绩效分析
+    ('status', np.int64),       # 交易状态（开放/关闭）：使用TradeStatus枚举值，0=Open（开放），1=Closed（关闭），区分活跃交易和历史交易，影响盈亏计算的方式
+    ('parent_id', np.int64)     # 父交易ID（用于关联分析）：用于关联相关交易的父级标识，支持复杂的交易关系建模，便于分层交易分析
 ]
 
 trade_dt = np.dtype(_trade_fields, align=True)
-"""交易记录数据类型，定义了完整交易生命周期的结构化数据格式"""
+"""交易记录数据类型，定义了完整交易生命周期的结构化数据格式
+
+该数据类型用于存储从开仓到平仓的完整交易信息，与order_dt不同，trade_dt记录的是完整的交易周期，而不是单个订单操作。
+
+使用示例：
+```python
+import numpy as np
+from vectorbt.portfolio.enums import trade_dt, TradeDirection, TradeStatus
+
+# 创建交易记录数组
+trades = np.array([
+    (0, 0, 100.0, 10, 50.25, 1.25, 15, 52.10, 0.65, 184.35, 0.0365, 0, 1, -1),
+    (1, 0, -50.0, 20, 51.80, 0.65, -1, 51.50, 0.0, -15.0, -0.0058, 1, 0, -1),
+], dtype=trade_dt)
+
+# 分析交易表现
+completed_trades = trades[trades['status'] == TradeStatus.Closed]
+open_trades = trades[trades['status'] == TradeStatus.Open]
+
+print(f"已完成交易数: {len(completed_trades)}")
+print(f"未平仓交易数: {len(open_trades)}")
+
+# 计算总盈亏
+total_pnl = trades['pnl'].sum()
+avg_return = trades[trades['status'] == TradeStatus.Closed]['return'].mean()
+
+print(f"总盈亏: {total_pnl:.2f}")
+print(f"平均收益率: {avg_return:.2%}")
+```
+"""
 
 __pdoc__['trade_dt'] = f"""交易记录数据类型
 
@@ -5350,56 +5472,89 @@ print(f"平均收益率: {avg_return:.2%}")
 
 _log_fields = [
     # 基础标识字段
-    ('id', np.int64),                    # 日志记录唯一标识符
-    ('group', np.int64),                 # 资产组索引
-    ('col', np.int64),                   # 列索引（资产索引）
-    ('idx', np.int64),                   # 时间索引（行索引）
+    ('id', np.int64),                    # 日志记录唯一标识符：全局递增的记录ID，用于日志追踪和调试
+    ('group', np.int64),                 # 资产组索引：用于现金共享分组，标识日志记录所属的资产组
+    ('col', np.int64),                   # 列索引（资产索引）：指示相关资产，范围[0, 资产数量-1]
+    ('idx', np.int64),                   # 时间索引（行索引）：记录发生的时间点，对应价格数据的行索引
     
     # 执行前状态字段
-    ('cash', np.float64),                # 执行前现金余额
-    ('position', np.float64),            # 执行前持仓数量
-    ('debt', np.float64),                # 执行前做空债务
-    ('free_cash', np.float64),           # 执行前可用现金
-    ('val_price', np.float64),           # 执行前资产估值价格
-    ('value', np.float64),               # 执行前组合总价值
+    ('cash', np.float64),                # 执行前现金余额：订单执行前的现金总额，用于状态对比分析
+    ('position', np.float64),            # 执行前持仓数量：订单执行前的资产持仓数量，正数多头，负数空头
+    ('debt', np.float64),                # 执行前做空债务：订单执行前的做空债务总额，影响可用资金计算
+    ('free_cash', np.float64),           # 执行前可用现金：订单执行前的可用于交易的现金，考虑债务和锁定资金
+    ('val_price', np.float64),           # 执行前资产估值价格：订单执行前的资产估值价格，用于价值计算
+    ('value', np.float64),               # 执行前组合总价值：订单执行前的组合总价值，现金+持仓价值-债务
     
     # 订单请求参数字段
-    ('req_size', np.float64),            # 请求的订单大小
-    ('req_price', np.float64),           # 请求的订单价格
-    ('req_size_type', np.int64),         # 请求的订单大小类型
-    ('req_direction', np.int64),         # 请求的交易方向
-    ('req_fees', np.float64),            # 请求的手续费率
-    ('req_fixed_fees', np.float64),      # 请求的固定手续费
-    ('req_slippage', np.float64),        # 请求的滑点率
-    ('req_min_size', np.float64),        # 请求的最小订单大小
-    ('req_max_size', np.float64),        # 请求的最大订单大小
-    ('req_size_granularity', np.float64), # 请求的订单大小粒度
-    ('req_reject_prob', np.float64),     # 请求的拒绝概率
-    ('req_lock_cash', np.bool_),         # 请求的现金锁定标志
-    ('req_allow_partial', np.bool_),     # 请求的部分成交允许标志
-    ('req_raise_reject', np.bool_),      # 请求的拒绝异常标志
-    ('req_log', np.bool_),               # 请求的日志记录标志
+    ('req_size', np.float64),            # 请求的订单大小：策略请求的交易数量或金额，可能因各种限制而调整
+    ('req_price', np.float64),           # 请求的订单价格：策略请求的交易价格，可能因滑点而调整
+    ('req_size_type', np.int64),         # 请求的订单大小类型：使用SizeType枚举，定义订单大小的解释方式
+    ('req_direction', np.int64),         # 请求的交易方向：使用Direction枚举，定义允许的交易方向
+    ('req_fees', np.float64),            # 请求的手续费率：按订单价值的百分比收费，影响交易成本
+    ('req_fixed_fees', np.float64),      # 请求的固定手续费：每笔订单的固定费用，与订单大小无关
+    ('req_slippage', np.float64),        # 请求的滑点率：价格滑动的百分比，影响实际成交价格
+    ('req_min_size', np.float64),        # 请求的最小订单大小：订单的最小允许大小，小于此值可能被拒绝
+    ('req_max_size', np.float64),        # 请求的最大订单大小：订单的最大允许大小，超过此值可能被拒绝
+    ('req_size_granularity', np.float64), # 请求的订单大小粒度：订单大小的最小调整单位，用于精度控制
+    ('req_reject_prob', np.float64),     # 请求的拒绝概率：随机拒绝订单的概率，用于模拟市场拒绝
+    ('req_lock_cash', np.bool_),         # 请求的现金锁定标志：做空时是否锁定现金，影响资金管理
+    ('req_allow_partial', np.bool_),     # 请求的部分成交允许标志：是否接受部分填充，影响订单执行策略
+    ('req_raise_reject', np.bool_),      # 请求的拒绝异常标志：拒绝时是否抛出异常，影响错误处理
+    ('req_log', np.bool_),               # 请求的日志记录标志：是否记录此订单的详细日志，影响调试信息
     
     # 执行后状态字段
-    ('new_cash', np.float64),            # 执行后现金余额
-    ('new_position', np.float64),        # 执行后持仓数量
-    ('new_debt', np.float64),            # 执行后做空债务
-    ('new_free_cash', np.float64),       # 执行后可用现金
-    ('new_val_price', np.float64),       # 执行后资产估值价格
-    ('new_value', np.float64),           # 执行后组合总价值
+    ('new_cash', np.float64),            # 执行后现金余额：订单执行后的现金总额，反映资金变化
+    ('new_position', np.float64),        # 执行后持仓数量：订单执行后的资产持仓数量，反映仓位变化
+    ('new_debt', np.float64),            # 执行后做空债务：订单执行后的做空债务总额，反映债务变化
+    ('new_free_cash', np.float64),       # 执行后可用现金：订单执行后的可用于交易的现金，反映可用资金变化
+    ('new_val_price', np.float64),       # 执行后资产估值价格：订单执行后的资产估值价格，可能因价格更新而变化
+    ('new_value', np.float64),           # 执行后组合总价值：订单执行后的组合总价值，反映整体价值变化
     
     # 执行结果字段
-    ('res_size', np.float64),            # 实际执行的订单大小
-    ('res_price', np.float64),           # 实际执行的订单价格
-    ('res_fees', np.float64),            # 实际产生的手续费
-    ('res_side', np.int64),              # 实际执行的订单方向
-    ('res_status', np.int64),            # 订单执行状态
-    ('res_status_info', np.int64),       # 订单状态详细信息
-    ('order_id', np.int64)               # 关联的订单记录ID
+    ('res_size', np.float64),            # 实际执行的订单大小：订单实际成交的数量，可能因资金限制而小于请求大小
+    ('res_price', np.float64),           # 实际执行的订单价格：订单实际成交的价格，包含滑点调整
+    ('res_fees', np.float64),            # 实际产生的手续费：订单执行产生的实际手续费，包括比例费用和固定费用
+    ('res_side', np.int64),              # 实际执行的订单方向：使用OrderSide枚举，0=Buy（买入），1=Sell（卖出）
+    ('res_status', np.int64),            # 订单执行状态：使用OrderStatus枚举，0=Filled（已成交），1=Ignored（已忽略），2=Rejected（已拒绝）
+    ('res_status_info', np.int64),       # 订单状态详细信息：使用OrderStatusInfo枚举，提供被忽略或拒绝的具体原因
+    ('order_id', np.int64)               # 关联的订单记录ID：对应的订单记录在order_records数组中的索引位置，用于关联分析
 ]
 
 log_dt = np.dtype(_log_fields, align=True)
-"""日志记录数据类型，定义了订单执行过程的完整状态记录格式"""
+"""日志记录数据类型，定义了订单执行过程的完整状态记录格式
+
+该数据类型用于存储订单执行前后的完整状态信息，是vectorbt中最详细的记录类型，
+包含了订单处理的全过程数据，是调试和分析的重要工具。
+
+使用示例：
+```python
+import numpy as np
+from vectorbt.portfolio.enums import log_dt, OrderStatus, OrderSide
+
+# 创建日志记录数组
+log_records = np.array([
+    (0, 0, 0, 10, 10000.0, 0.0, 0.0, 10000.0, 50.0, 10000.0, 
+     100.0, 50.0, 0, 2, 0.001, 1.0, 0.0, 0.0, np.inf, 0.0, 0.0, 
+     False, True, False, True, 9900.0, 100.0, 0.0, 9900.0, 50.0, 14900.0,
+     100.0, 50.0, 2.5, 0, 0, 0, 0),
+], dtype=log_dt)
+
+# 分析订单执行情况
+filled_logs = log_records[log_records['res_status'] == OrderStatus.Filled]
+rejected_logs = log_records[log_records['res_status'] == OrderStatus.Rejected]
+
+print(f"成功执行订单数: {len(filled_logs)}")
+print(f"被拒绝订单数: {len(rejected_logs)}")
+
+# 计算平均手续费
+avg_fees = log_records['res_fees'].mean()
+print(f"平均手续费: {avg_fees:.2f}")
+
+# 分析资金变化
+cash_changes = log_records['new_cash'] - log_records['cash']
+print(f"总资金变化: {cash_changes.sum():.2f}")
+```
+"""
 
 __pdoc__['log_dt'] = f"""日志记录数据类型
 

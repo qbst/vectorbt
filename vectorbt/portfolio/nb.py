@@ -10391,44 +10391,111 @@ def trade_losing_streak_nb(records: tp.RecordArray) -> tp.Array1d:
 
 # ############# Position records ############# #
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def fill_position_record_nb(record: tp.Record, id_: int, trade_records: tp.RecordArray) -> None:
-    """Fill a position record by aggregating trade records."""
-    # Aggregate trades
-    col = trade_records['col'][0]
-    size = np.sum(trade_records['size'])
-    entry_idx = trade_records['entry_idx'][0]
-    entry_price = np.sum(trade_records['size'] * trade_records['entry_price']) / size
-    entry_fees = np.sum(trade_records['entry_fees'])
-    exit_idx = trade_records['exit_idx'][-1]
-    exit_price = np.sum(trade_records['size'] * trade_records['exit_price']) / size
-    exit_fees = np.sum(trade_records['exit_fees'])
-    direction = trade_records['direction'][-1]
-    status = trade_records['status'][-1]
-    pnl, ret = get_trade_stats_nb(
-        size,
-        entry_price,
-        entry_fees,
-        exit_price,
-        exit_fees,
-        direction
+    """
+    填充仓位记录
+    
+    通过聚合多个交易记录来创建一个完整的仓位记录。该函数将属于同一仓位的
+    多个交易记录合并为一个统一的仓位记录，包含完整的入场、出场和绩效信息。
+    
+    参数:
+    ----
+    record : Record
+        目标仓位记录，将被填充数据
+        
+    id_ : int
+        仓位记录的唯一标识符
+        
+    trade_records : RecordArray
+        属于该仓位的交易记录数组，包含多个交易记录
+        
+    返回:
+    ----
+    None
+        直接修改目标记录，无返回值
+        
+    聚合逻辑:
+    --------
+    - **资产列**: 使用第一个交易的资产列索引
+    - **总数量**: 所有交易数量的总和
+    - **入场时间**: 使用第一个交易的入场时间
+    - **入场价格**: 按交易数量加权的平均入场价格
+    - **入场费用**: 所有入场费用的总和
+    - **出场时间**: 使用最后一个交易的出场时间
+    - **出场价格**: 按交易数量加权的平均出场价格
+    - **出场费用**: 所有出场费用的总和
+    - **交易方向**: 使用最后一个交易的方向
+    - **交易状态**: 使用最后一个交易的状态
+    - **盈亏计算**: 调用get_trade_stats_nb计算总盈亏和收益率
+    
+    使用示例:
+    --------
+    >>> import numpy as np
+    >>> from vectorbt.portfolio.enums import trade_dt, position_dt
+    >>> 
+    >>> # 创建交易记录数组（同一仓位的多个交易）
+    >>> trades = np.array([
+    >>>     (0, 0, 50.0, 10, 100.0, 5.0, 15, 110.0, 5.0, 0, 1, 0),  # 第一笔交易
+    >>>     (1, 0, 30.0, 12, 105.0, 3.0, 15, 110.0, 3.0, 0, 1, 0),  # 第二笔交易
+    >>> ], dtype=trade_dt)
+    >>> 
+    >>> # 创建仓位记录
+    >>> position = np.empty(1, dtype=position_dt)[0]
+    >>> 
+    >>> # 填充仓位记录
+    >>> fill_position_record_nb(position, 0, trades)
+    >>> 
+    >>> # 查看结果
+    >>> print(f"总数量: {position['size']}")  # 80.0
+    >>> print(f"平均入场价格: {position['entry_price']:.2f}")  # 101.88
+    >>> print(f"总盈亏: {position['pnl']:.2f}")  # 计算得出
+    
+    应用场景:
+    --------
+    - **仓位分析**: 将分散的交易记录合并为完整的仓位记录
+    - **绩效评估**: 计算仓位的整体盈亏和收益率
+    - **风险管理**: 分析仓位的完整生命周期
+    - **报告生成**: 生成仓位级别的分析报告
+    - **策略优化**: 基于仓位级别的绩效进行策略调整
+    """
+    # 聚合交易记录数据
+    col = trade_records['col'][0]                    # 资产列索引：使用第一个交易的资产列
+    size = np.sum(trade_records['size'])             # 总数量：所有交易数量的累加
+    entry_idx = trade_records['entry_idx'][0]        # 入场时间：使用第一个交易的入场时间
+    entry_price = np.sum(trade_records['size'] * trade_records['entry_price']) / size  # 加权平均入场价格
+    entry_fees = np.sum(trade_records['entry_fees']) # 总入场费用：所有入场费用的累加
+    exit_idx = trade_records['exit_idx'][-1]         # 出场时间：使用最后一个交易的出场时间
+    exit_price = np.sum(trade_records['size'] * trade_records['exit_price']) / size    # 加权平均出场价格
+    exit_fees = np.sum(trade_records['exit_fees'])   # 总出场费用：所有出场费用的累加
+    direction = trade_records['direction'][-1]       # 交易方向：使用最后一个交易的方向
+    status = trade_records['status'][-1]             # 交易状态：使用最后一个交易的状态
+    
+    # 计算仓位绩效指标
+    pnl, ret = get_trade_stats_nb(                   # 调用绩效计算函数
+        size,                                        # 总交易数量
+        entry_price,                                 # 平均入场价格
+        entry_fees,                                  # 总入场费用
+        exit_price,                                  # 平均出场价格
+        exit_fees,                                   # 总出场费用
+        direction                                    # 交易方向
     )
 
-    # Save position
-    record['id'] = id_
-    record['col'] = col
-    record['size'] = size
-    record['entry_idx'] = entry_idx
-    record['entry_price'] = entry_price
-    record['entry_fees'] = entry_fees
-    record['exit_idx'] = exit_idx
-    record['exit_price'] = exit_price
-    record['exit_fees'] = exit_fees
-    record['pnl'] = pnl
-    record['return'] = ret
-    record['direction'] = direction
-    record['status'] = status
-    record['parent_id'] = id_
+    # 保存仓位记录数据
+    record['id'] = id_                               # 仓位记录ID
+    record['col'] = col                              # 资产列索引
+    record['size'] = size                            # 总交易数量
+    record['entry_idx'] = entry_idx                  # 入场时间索引
+    record['entry_price'] = entry_price              # 平均入场价格
+    record['entry_fees'] = entry_fees                # 总入场费用
+    record['exit_idx'] = exit_idx                    # 出场时间索引
+    record['exit_price'] = exit_price                # 平均出场价格
+    record['exit_fees'] = exit_fees                  # 总出场费用
+    record['pnl'] = pnl                              # 总盈亏金额
+    record['return'] = ret                           # 总收益率
+    record['direction'] = direction                  # 交易方向
+    record['status'] = status                        # 交易状态
+    record['parent_id'] = id_                        # 父记录ID（与仓位ID相同）
 
 
 @njit(cache=True)  # Numba编译缓存，优化重复调用性能

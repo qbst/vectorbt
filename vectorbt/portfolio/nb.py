@@ -325,6 +325,7 @@ def buy_nb(exec_state: ExecuteOrderState,
         else:
             # 空头头寸情况：需要考虑平仓成本
             # 计算完全平掉当前空头头寸需要多少现金
+            # 当开空头时，会锁定两倍空头市值作为保证金（空头市值=空头数量*价格）
             cover_req_cash = abs(exec_state.position) * adj_price * (1 + fees) + fixed_fees
             # 计算平仓后剩余的自由现金：当前自由现金 + 释放的债务保证金 - 平仓成本
             cover_free_cash = add_nb(exec_state.free_cash + 2 * exec_state.debt, -cover_req_cash)
@@ -337,6 +338,8 @@ def buy_nb(exec_state: ExecuteOrderState,
                 # 计算能够部分平仓的最大数量
                 avg_entry_price = exec_state.debt / abs(exec_state.position)  # 空头的平均入场价格
                 # 计算最多能平多少空头：考虑手续费和保证金释放
+                # 可用现金 + 释放保证金 = 买入成本 + 手续费
+                # free_cash + 2 * avg_entry_price * x = adj_price * x + adj_price * x * fees + fixed_fees
                 max_short_size = ((exec_state.free_cash - fixed_fees) / (adj_price * (1 + fees) - 2 * avg_entry_price))
                 # 对应的现金限制
                 cash_limit = max_short_size * adj_price * (1 + fees) + fixed_fees
@@ -465,8 +468,9 @@ def buy_nb(exec_state: ExecuteOrderState,
             short_size = abs(exec_state.position)  # 原空头头寸的绝对值
         
         # 计算空头平仓时释放的债务
-        avg_entry_price = exec_state.debt / abs(exec_state.position)  # 空头平均入场价格
-        debt_diff = short_size * avg_entry_price                      # 本次平仓释放的债务金额
+        avg_entry_price = exec_state.debt / abs(exec_state.position)  # 空头平均入场价格 = short_size * avg_entry_price 
+        debt_diff = short_size * avg_entry_price
+        # 本次平仓释放的债务金额
         new_debt = add_nb(exec_state.debt, -debt_diff)                # 新债务 = 原债务 - 释放的债务
         # 新自由现金 = 原自由现金 + 释放的债务保证金(2倍) - 交易成本
         new_free_cash = add_nb(exec_state.free_cash + 2 * debt_diff, -final_req_cash)
@@ -478,6 +482,14 @@ def buy_nb(exec_state: ExecuteOrderState,
     # 构建并返回成功执行的订单结果
     order_result = OrderResult(
         final_size,              # 实际成交数量
+        adj_price,              # 实际成交价格（含滑点）
+        fees_paid,              # 实际支付的手续费
+        OrderSide.Buy,          # 订单方向：买入
+        OrderStatus.Filled,     # 订单状态：已成交        final_size,              # 实际成交数量
+        adj_price,              # 实际成交价格（含滑点）
+        fees_paid,              # 实际支付的手续费
+        OrderSide.Buy,          # 订单方向：买入
+        OrderStatus.Filled,     # 订单状态：已成交        final_size,              # 实际成交数量
         adj_price,              # 实际成交价格（含滑点）
         fees_paid,              # 实际支付的手续费
         OrderSide.Buy,          # 订单方向：买入

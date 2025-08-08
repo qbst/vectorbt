@@ -485,15 +485,7 @@ def buy_nb(exec_state: ExecuteOrderState,
         adj_price,              # 实际成交价格（含滑点）
         fees_paid,              # 实际支付的手续费
         OrderSide.Buy,          # 订单方向：买入
-        OrderStatus.Filled,     # 订单状态：已成交        final_size,              # 实际成交数量
-        adj_price,              # 实际成交价格（含滑点）
-        fees_paid,              # 实际支付的手续费
-        OrderSide.Buy,          # 订单方向：买入
-        OrderStatus.Filled,     # 订单状态：已成交        final_size,              # 实际成交数量
-        adj_price,              # 实际成交价格（含滑点）
-        fees_paid,              # 实际支付的手续费
-        OrderSide.Buy,          # 订单方向：买入
-        OrderStatus.Filled,     # 订单状态：已成交
+        OrderStatus.Filled,     # 订单状态：已成交        final_size,              # 实际成交数量    final_size,              # 实际成交数量 # 订单状态：已成交
         -1                      # 状态详情：无特殊信息
     )
     

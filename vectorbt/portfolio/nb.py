@@ -3561,6 +3561,18 @@ def update_pos_record_nb(record: tp.Record,
     ----
     record : Record
         头寸记录对象，存储交易的详细信息
+        id：交易ID
+        col：资产列索引
+        size：头寸大小
+        entry_idx：入场时间索引
+        entry_price：入场价格
+        entry_fees：入场手续费
+        exit_idx：出场时间索引
+        exit_price：出场价格
+        exit_fees：出场手续费
+        direction：交易方向
+        status：交易状态
+        parent_id：父交易ID
         
     i : int
         当前时间索引（时间步）

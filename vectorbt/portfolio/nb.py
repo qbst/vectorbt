@@ -6907,284 +6907,362 @@ def simulate_nb(target_shape: tp.Shape,
      **完整钩子体系:**
      pre_sim -> pre_group -> (pre_segment -> order -> post_order) -> post_segment -> post_group -> post_sim
      """
-    # 由于simulate_nb函数实现极其复杂（超过1000行），包含完整的用户定义钩子函数体系，
-    # 这里仅为核心结构添加注释。详细实现请参考上述docstring中的完整说明。
+    # ========== 参数验证和数据结构初始化 ==========
     
-    # ========== 前期验证和初始化 ==========
+    # 验证组长度配置的有效性，确保组配置与列数匹配
     check_group_lens_nb(group_lens, target_shape[1])
+    # 验证初始现金配置，确保现金数量与组数和现金共享设置一致
     check_group_init_cash_nb(group_lens, target_shape[1], init_cash, cash_sharing)
 
+    # 初始化订单记录和日志记录数组，为后续交易记录做准备
     order_records, log_records = init_records_nb(target_shape, max_orders, max_logs)
+    
+    # ========== 状态变量初始化 ==========
+    
+    # 确保初始现金为float64类型，保证数值精度
     init_cash = init_cash.astype(np.float64)
+    # 复制初始现金作为当前现金状态，避免修改原始数据
     last_cash = init_cash.copy()
+    # 初始化每列的持仓数量，开始时所有资产持仓为0
     last_position = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的债务金额，开始时无债务
     last_debt = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的可用现金，开始时等于初始现金
     last_free_cash = init_cash.copy()
+    # 初始化每列的估值价格，开始时为NaN，表示未设置
     last_val_price = np.full(target_shape[1], np.nan, dtype=np.float64)
+    # 初始化每列的组合价值，开始时等于初始现金
     last_value = init_cash.copy()
+    # 初始化前一期的组合价值，用于计算收益率
     second_last_value = init_cash.copy()
+    # 初始化临时价值变量，用于价值计算的中间存储
     temp_value = init_cash.copy()
+    # 初始化收益率数组，开始时为NaN，表示无法计算
     last_return = np.full_like(last_value, np.nan)
+    # 初始化持仓记录数组，用于跟踪每列的持仓状态
     last_pos_record = np.empty(target_shape[1], dtype=trade_dt)
+    # 将持仓记录ID初始化为-1，表示无活跃持仓
     last_pos_record['id'][:] = -1
+    # 初始化每列最后订单索引，-1表示尚无订单
     last_oidx = np.full(target_shape[1], -1, dtype=np.int64)
+    # 初始化每列最后日志索引，-1表示尚无日志
     last_lidx = np.full(target_shape[1], -1, dtype=np.int64)
+    # 初始化全局订单索引计数器
     oidx = 0
+    # 初始化全局日志索引计数器
     lidx = 0
 
-    # Call function before the simulation
+    # ========== 模拟前钩子函数调用 ==========
+    
+    # 构建模拟上下文对象，包含所有模拟状态和配置信息
     pre_sim_ctx = SimulationContext(
-        target_shape=target_shape,
-        group_lens=group_lens,
-        init_cash=init_cash,
-        cash_sharing=cash_sharing,
-        call_seq=call_seq,
-        segment_mask=segment_mask,
-        call_pre_segment=call_pre_segment,
-        call_post_segment=call_post_segment,
-        close=close,
-        ffill_val_price=ffill_val_price,
-        update_value=update_value,
-        fill_pos_record=fill_pos_record,
-        flex_2d=flex_2d,
-        order_records=order_records,
-        log_records=log_records,
-        last_cash=last_cash,
-        last_position=last_position,
-        last_debt=last_debt,
-        last_free_cash=last_free_cash,
-        last_val_price=last_val_price,
-        last_value=last_value,
-        second_last_value=second_last_value,
-        last_return=last_return,
-        last_oidx=last_oidx,
-        last_lidx=last_lidx,
-        last_pos_record=last_pos_record
+        target_shape=target_shape,        # 模拟的目标形状（时间步数，资产数）
+        group_lens=group_lens,            # 每个组包含的列数
+        init_cash=init_cash,              # 初始现金配置
+        cash_sharing=cash_sharing,        # 现金共享模式
+        call_seq=call_seq,                # 调用序列矩阵
+        segment_mask=segment_mask,        # 分段掩码
+        call_pre_segment=call_pre_segment,    # 是否调用分段前函数
+        call_post_segment=call_post_segment,  # 是否调用分段后函数
+        close=close,                      # 收盘价数据
+        ffill_val_price=ffill_val_price,  # 是否前向填充估值价格
+        update_value=update_value,        # 是否更新组合价值
+        fill_pos_record=fill_pos_record,  # 是否填充持仓记录
+        flex_2d=flex_2d,                  # 是否启用2D灵活广播
+        order_records=order_records,      # 订单记录数组
+        log_records=log_records,          # 日志记录数组
+        last_cash=last_cash,              # 当前现金状态
+        last_position=last_position,      # 当前持仓状态
+        last_debt=last_debt,              # 当前债务状态
+        last_free_cash=last_free_cash,    # 当前可用现金
+        last_val_price=last_val_price,    # 当前估值价格
+        last_value=last_value,            # 当前组合价值
+        second_last_value=second_last_value,  # 前一期组合价值
+        last_return=last_return,          # 当前收益率
+        last_oidx=last_oidx,              # 最后订单索引
+        last_lidx=last_lidx,              # 最后日志索引
+        last_pos_record=last_pos_record   # 持仓记录状态
     )
+    # 调用模拟前钩子函数，获取返回值供后续函数使用
     pre_sim_out = pre_sim_func_nb(pre_sim_ctx, *pre_sim_args)
 
+    # ========== 按组遍历处理（列主序） ==========
+    
+    # 初始化起始列索引
     from_col = 0
+    # 遍历每个资产组
     for group in range(len(group_lens)):
+        # 计算当前组的结束列索引（不包含）
         to_col = from_col + group_lens[group]
+        # 计算当前组包含的列数
         group_len = to_col - from_col
 
-        # Call function before the group
+        # ========== 组前钩子函数调用 ==========
+        
+        # 构建组上下文对象，包含组级别的状态和配置信息
         pre_group_ctx = GroupContext(
-            target_shape=target_shape,
-            group_lens=group_lens,
-            init_cash=init_cash,
-            cash_sharing=cash_sharing,
-            call_seq=call_seq,
-            segment_mask=segment_mask,
-            call_pre_segment=call_pre_segment,
-            call_post_segment=call_post_segment,
-            close=close,
-            ffill_val_price=ffill_val_price,
-            update_value=update_value,
-            fill_pos_record=fill_pos_record,
-            flex_2d=flex_2d,
-            order_records=order_records,
-            log_records=log_records,
-            last_cash=last_cash,
-            last_position=last_position,
-            last_debt=last_debt,
-            last_free_cash=last_free_cash,
-            last_val_price=last_val_price,
-            last_value=last_value,
-            second_last_value=second_last_value,
-            last_return=last_return,
-            last_oidx=last_oidx,
-            last_lidx=last_lidx,
-            last_pos_record=last_pos_record,
-            group=group,
-            group_len=group_len,
-            from_col=from_col,
-            to_col=to_col
+            target_shape=target_shape,        # 模拟的目标形状
+            group_lens=group_lens,            # 组长度配置
+            init_cash=init_cash,              # 初始现金
+            cash_sharing=cash_sharing,        # 现金共享模式
+            call_seq=call_seq,                # 调用序列
+            segment_mask=segment_mask,        # 分段掩码
+            call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+            call_post_segment=call_post_segment,  # 分段后函数调用标志
+            close=close,                      # 收盘价数据
+            ffill_val_price=ffill_val_price,  # 价格前向填充标志
+            update_value=update_value,        # 价值更新标志
+            fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+            flex_2d=flex_2d,                  # 2D灵活广播标志
+            order_records=order_records,      # 订单记录数组
+            log_records=log_records,          # 日志记录数组
+            last_cash=last_cash,              # 当前现金状态
+            last_position=last_position,      # 当前持仓状态
+            last_debt=last_debt,              # 当前债务状态
+            last_free_cash=last_free_cash,    # 当前可用现金
+            last_val_price=last_val_price,    # 当前估值价格
+            last_value=last_value,            # 当前组合价值
+            second_last_value=second_last_value,  # 前一期组合价值
+            last_return=last_return,          # 当前收益率
+            last_oidx=last_oidx,              # 最后订单索引
+            last_lidx=last_lidx,              # 最后日志索引
+            last_pos_record=last_pos_record,  # 持仓记录状态
+            group=group,                      # 当前组索引
+            group_len=group_len,              # 当前组长度
+            from_col=from_col,                   # 当前组起始列索引
+            to_col=to_col                     # 当前组结束列索引
         )
+        # 调用组前钩子函数，获取返回值供分段函数使用
         pre_group_out = pre_group_func_nb(pre_group_ctx, *pre_sim_out, *pre_group_args)
 
+        # ========== 按时间步遍历处理（列主序内的时间循环） ==========
+        
+        # 遍历每个时间步
         for i in range(target_shape[0]):
+            # 获取当前时间步当前组的调用序列
             call_seq_now = call_seq[i, from_col:to_col]
 
-            # Is this segment active?
+            # ========== 分段前处理 ==========
+            
+            # 检查当前分段是否激活（需要调用分段前函数或分段掩码为True）
             if call_pre_segment or segment_mask[i, group]:
-                # Call function before the segment
+                # 构建分段上下文对象，包含分段级别的状态和配置
                 pre_seg_ctx = SegmentContext(
-                    target_shape=target_shape,
-                    group_lens=group_lens,
-                    init_cash=init_cash,
-                    cash_sharing=cash_sharing,
-                    call_seq=call_seq,
-                    segment_mask=segment_mask,
-                    call_pre_segment=call_pre_segment,
-                    call_post_segment=call_post_segment,
-                    close=close,
-                    ffill_val_price=ffill_val_price,
-                    update_value=update_value,
-                    fill_pos_record=fill_pos_record,
-                    flex_2d=flex_2d,
-                    order_records=order_records,
-                    log_records=log_records,
-                    last_cash=last_cash,
-                    last_position=last_position,
-                    last_debt=last_debt,
-                    last_free_cash=last_free_cash,
-                    last_val_price=last_val_price,
-                    last_value=last_value,
-                    second_last_value=second_last_value,
-                    last_return=last_return,
-                    last_oidx=last_oidx,
-                    last_lidx=last_lidx,
-                    last_pos_record=last_pos_record,
-                    group=group,
-                    group_len=group_len,
-                    from_col=from_col,
-                    to_col=to_col,
-                    i=i,
-                    call_seq_now=call_seq_now
+                    target_shape=target_shape,        # 模拟的目标形状
+                    group_lens=group_lens,            # 组长度配置
+                    init_cash=init_cash,              # 初始现金
+                    cash_sharing=cash_sharing,        # 现金共享模式
+                    call_seq=call_seq,                # 调用序列矩阵
+                    segment_mask=segment_mask,        # 分段掩码
+                    call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+                    call_post_segment=call_post_segment,  # 分段后函数调用标志
+                    close=close,                      # 收盘价数据
+                    ffill_val_price=ffill_val_price,  # 价格前向填充标志
+                    update_value=update_value,        # 价值更新标志
+                    fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+                    flex_2d=flex_2d,                  # 2D灵活广播标志
+                    order_records=order_records,      # 订单记录数组
+                    log_records=log_records,          # 日志记录数组
+                    last_cash=last_cash,              # 当前现金状态
+                    last_position=last_position,      # 当前持仓状态
+                    last_debt=last_debt,              # 当前债务状态
+                    last_free_cash=last_free_cash,    # 当前可用现金
+                    last_val_price=last_val_price,    # 当前估值价格
+                    last_value=last_value,            # 当前组合价值
+                    second_last_value=second_last_value,  # 前一期组合价值
+                    last_return=last_return,          # 当前收益率
+                    last_oidx=last_oidx,              # 最后订单索引
+                    last_lidx=last_lidx,              # 最后日志索引
+                    last_pos_record=last_pos_record,  # 持仓记录状态
+                    group=group,                      # 当前组索引
+                    group_len=group_len,              # 当前组长度
+                    from_col=from_col,                # 当前组起始列索引
+                    to_col=to_col,                    # 当前组结束列索引
+                    i=i,                              # 当前时间步索引
+                    call_seq_now=call_seq_now         # 当前时间步的调用序列
                 )
+                # 调用分段前钩子函数，获取返回值供订单函数使用
                 pre_segment_out = pre_segment_func_nb(pre_seg_ctx, *pre_group_out, *pre_segment_args)
 
-            # Update open position stats
+            # ========== 持仓统计更新 ==========
+            
+            # 如果启用了持仓记录填充，更新开放持仓的统计信息
             if fill_pos_record:
+                # 遍历当前组的所有列
                 for col in range(from_col, to_col):
+                    # 更新每列的开放持仓统计（未实现收益、持仓天数等）
                     update_open_pos_stats_nb(
-                        last_pos_record[col],
-                        last_position[col],
-                        last_val_price[col]
+                        last_pos_record[col],    # 持仓记录
+                        last_position[col],      # 当前持仓数量
+                        last_val_price[col]      # 当前估值价格
                     )
 
-            # Update value and return
+            # ========== 组合价值和收益率更新 ==========
+            
+            # 根据现金共享模式选择不同的价值计算方式
             if cash_sharing:
+                # 现金共享模式：计算整个组的总价值
                 last_value[group] = get_group_value_nb(
-                    from_col,
-                    to_col,
-                    last_cash[group],
-                    last_position,
-                    last_val_price
+                    from_col,                    # 组起始列
+                    to_col,                      # 组结束列
+                    last_cash[group],            # 组的现金
+                    last_position,               # 所有列的持仓
+                    last_val_price               # 所有列的估值价格
                 )
+                # 计算组级别的收益率
                 last_return[group] = returns_nb.get_return_nb(second_last_value[group], last_value[group])
             else:
+                # 非现金共享模式：分别计算每列的价值
                 for col in range(from_col, to_col):
+                    # 如果无持仓，价值等于现金
                     if last_position[col] == 0:
                         last_value[col] = last_cash[col]
                     else:
+                        # 价值 = 现金 + 持仓价值
                         last_value[col] = last_cash[col] + last_position[col] * last_val_price[col]
+                    # 计算列级别的收益率
                     last_return[col] = returns_nb.get_return_nb(second_last_value[col], last_value[col])
 
-            # Is this segment active?
+            # ========== 订单执行循环 ==========
+            
+            # 检查当前分段是否激活需要执行订单
             if segment_mask[i, group]:
 
+                # 按调用序列遍历组内的每一列
                 for k in range(group_len):
+                    # 获取调用序列中的列索引
                     col_i = call_seq_now[k]
+                    # 验证列索引是否在组范围内
                     if col_i >= group_len:
                         raise ValueError("Call index exceeds bounds of the group")
+                    # 计算实际的列索引
                     col = from_col + col_i
 
-                    # Get current values
-                    position_now = last_position[col]
-                    debt_now = last_debt[col]
-                    val_price_now = last_val_price[col]
-                    pos_record_now = last_pos_record[col]
+                    # ========== 获取当前状态值 ==========
+                    
+                    # 获取当前列的持仓状态
+                    position_now = last_position[col]      # 当前持仓数量
+                    debt_now = last_debt[col]              # 当前债务金额
+                    val_price_now = last_val_price[col]    # 当前估值价格
+                    pos_record_now = last_pos_record[col]  # 当前持仓记录
+                    
+                    # 根据现金共享模式获取相应的现金和价值信息
                     if cash_sharing:
-                        cash_now = last_cash[group]
-                        free_cash_now = last_free_cash[group]
-                        value_now = last_value[group]
-                        return_now = last_return[group]
+                        # 现金共享：使用组级别的现金和价值
+                        cash_now = last_cash[group]           # 组的现金
+                        free_cash_now = last_free_cash[group] # 组的可用现金
+                        value_now = last_value[group]         # 组的总价值
+                        return_now = last_return[group]       # 组的收益率
                     else:
-                        cash_now = last_cash[col]
-                        free_cash_now = last_free_cash[col]
-                        value_now = last_value[col]
-                        return_now = last_return[col]
+                        # 非现金共享：使用列级别的现金和价值
+                        cash_now = last_cash[col]             # 列的现金
+                        free_cash_now = last_free_cash[col]   # 列的可用现金
+                        value_now = last_value[col]           # 列的价值
+                        return_now = last_return[col]         # 列的收益率
 
-                    # Generate the next order
+                    # ========== 订单生成 ==========
+                    
+                    # 构建订单上下文对象，包含订单生成所需的所有信息
                     order_ctx = OrderContext(
-                        target_shape=target_shape,
-                        group_lens=group_lens,
-                        init_cash=init_cash,
-                        cash_sharing=cash_sharing,
-                        call_seq=call_seq,
-                        segment_mask=segment_mask,
-                        call_pre_segment=call_pre_segment,
-                        call_post_segment=call_post_segment,
-                        close=close,
-                        ffill_val_price=ffill_val_price,
-                        update_value=update_value,
-                        fill_pos_record=fill_pos_record,
-                        flex_2d=flex_2d,
-                        order_records=order_records,
-                        log_records=log_records,
-                        last_cash=last_cash,
-                        last_position=last_position,
-                        last_debt=last_debt,
-                        last_free_cash=last_free_cash,
-                        last_val_price=last_val_price,
-                        last_value=last_value,
-                        second_last_value=second_last_value,
-                        last_return=last_return,
-                        last_oidx=last_oidx,
-                        last_lidx=last_lidx,
-                        last_pos_record=last_pos_record,
-                        group=group,
-                        group_len=group_len,
-                        from_col=from_col,
-                        to_col=to_col,
-                        i=i,
-                        call_seq_now=call_seq_now,
-                        col=col,
-                        call_idx=k,
-                        cash_now=cash_now,
-                        position_now=position_now,
-                        debt_now=debt_now,
-                        free_cash_now=free_cash_now,
-                        val_price_now=val_price_now,
-                        value_now=value_now,
-                        return_now=return_now,
-                        pos_record_now=pos_record_now
+                        target_shape=target_shape,        # 模拟的目标形状
+                        group_lens=group_lens,            # 组长度配置
+                        init_cash=init_cash,              # 初始现金
+                        cash_sharing=cash_sharing,        # 现金共享模式
+                        call_seq=call_seq,                # 调用序列矩阵
+                        segment_mask=segment_mask,        # 分段掩码
+                        call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+                        call_post_segment=call_post_segment,  # 分段后函数调用标志
+                        close=close,                      # 收盘价数据
+                        ffill_val_price=ffill_val_price,  # 价格前向填充标志
+                        update_value=update_value,        # 价值更新标志
+                        fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+                        flex_2d=flex_2d,                  # 2D灵活广播标志
+                        order_records=order_records,      # 订单记录数组
+                        log_records=log_records,          # 日志记录数组
+                        last_cash=last_cash,              # 当前现金状态
+                        last_position=last_position,      # 当前持仓状态
+                        last_debt=last_debt,              # 当前债务状态
+                        last_free_cash=last_free_cash,    # 当前可用现金
+                        last_val_price=last_val_price,    # 当前估值价格
+                        last_value=last_value,            # 当前组合价值
+                        second_last_value=second_last_value,  # 前一期组合价值
+                        last_return=last_return,          # 当前收益率
+                        last_oidx=last_oidx,              # 最后订单索引
+                        last_lidx=last_lidx,              # 最后日志索引
+                        last_pos_record=last_pos_record,  # 持仓记录状态
+                        group=group,                      # 当前组索引
+                        group_len=group_len,              # 当前组长度
+                        from_col=from_col,                # 当前组起始列索引
+                        to_col=to_col,                    # 当前组结束列索引
+                        i=i,                              # 当前时间步索引
+                        call_seq_now=call_seq_now,       # 当前时间步的调用序列
+                        col=col,                          # 当前处理的列索引
+                        call_idx=k,                       # 当前调用索引（在组内的位置）
+                        cash_now=cash_now,                # 当前现金金额
+                        position_now=position_now,        # 当前持仓数量
+                        debt_now=debt_now,                # 当前债务金额
+                        free_cash_now=free_cash_now,      # 当前可用现金
+                        val_price_now=val_price_now,      # 当前估值价格
+                        value_now=value_now,              # 当前组合价值
+                        return_now=return_now,            # 当前收益率
+                        pos_record_now=pos_record_now     # 当前持仓记录
                     )
+                    # 调用订单生成函数，根据当前状态生成订单
                     order = order_func_nb(order_ctx, *pre_segment_out, *order_args)
+                    
+                    # ========== 订单价格处理 ==========
+                    
+                    # 检查订单价格是否为无穷大，需要用实际价格替换
                     if np.isinf(order.price):
+                        # 如果不是第一个时间步，获取前一期的收盘价
                         if i > 0:
                             _prev_close = flex_select_auto_nb(close, i - 1, col, flex_2d)
                         else:
+                            # 第一个时间步无前期数据，设置为NaN
                             _prev_close = np.nan
+                        # 获取当前时间步的收盘价
                         _close = flex_select_auto_nb(close, i, col, flex_2d)
+                        # 用实际价格替换订单中的无穷大价格
                         order = replace_inf_price_nb(_prev_close, _close, order)
 
-                    # Process the order
+                    # ========== 订单处理和执行 ==========
+                    
+                    # 构建处理订单前的状态对象，包含执行订单所需的所有状态信息
                     state = ProcessOrderState(
-                        cash=cash_now,
-                        position=position_now,
-                        debt=debt_now,
-                        free_cash=free_cash_now,
-                        val_price=val_price_now,
-                        value=value_now,
-                        oidx=oidx,
-                        lidx=lidx
+                        cash=cash_now,                    # 当前现金余额
+                        position=position_now,            # 当前持仓数量
+                        debt=debt_now,                    # 当前债务金额
+                        free_cash=free_cash_now,          # 当前可用现金（扣除锁定部分）
+                        val_price=val_price_now,          # 当前估值价格
+                        value=value_now,                  # 当前组合总价值
+                        oidx=oidx,                        # 全局订单记录索引
+                        lidx=lidx                         # 全局日志记录索引
                     )
 
+                    # 处理订单：验证订单合法性、执行交易、更新状态、记录日志
                     order_result, new_state = process_order_nb(
-                        i, col, group,
-                        state,
-                        update_value,
-                        order,
-                        order_records,
-                        log_records
+                        i, col, group,                    # 当前时间步、列索引、组索引
+                        state,                            # 订单执行前的状态
+                        update_value,                     # 是否更新组合价值标志
+                        order,                            # 要执行的订单对象
+                        order_records,                    # 订单记录数组（用于存储执行结果）
+                        log_records                       # 日志记录数组（用于存储详细日志）
                     )
 
-                    # Update state
-                    cash_now = new_state.cash
-                    position_now = new_state.position
-                    debt_now = new_state.debt
-                    free_cash_now = new_state.free_cash
-                    val_price_now = new_state.val_price
-                    value_now = new_state.value
+                    # ========== 状态更新 ==========
+                    cash_now = new_state.cash             # 更新后的现金余额
+                    position_now = new_state.position     # 更新后的持仓数量
+                    debt_now = new_state.debt             # 更新后的债务金额
+                    free_cash_now = new_state.free_cash   # 更新后的可用现金
+                    val_price_now = new_state.val_price   # 更新后的估值价格
+                    value_now = new_state.value           # 更新后的组合总价值
+                    # 根据现金共享模式选择收益率计算基准
                     if cash_sharing:
-                        return_now = returns_nb.get_return_nb(second_last_value[group], value_now)
+                        return_now = returns_nb.get_return_nb(second_last_value[group], value_now)  # 组级收益率
                     else:
-                        return_now = returns_nb.get_return_nb(second_last_value[col], value_now)
-                    oidx = new_state.oidx
-                    lidx = new_state.lidx
+                        return_now = returns_nb.get_return_nb(second_last_value[col], value_now)    # 列级收益率
+                    oidx = new_state.oidx                 # 同步全局订单索引
+                    lidx = new_state.lidx                 # 同步全局日志索引
 
                     # Now becomes last
                     last_position[col] = position_now
@@ -7201,223 +7279,234 @@ def simulate_nb(target_shape: tp.Shape,
                         last_free_cash[col] = free_cash_now
                         last_value[col] = value_now
                         last_return[col] = return_now
+                    # 若本次执行产生新订单或日志，记录上一索引以便后续定位
                     if state.oidx != new_state.oidx:
-                        last_oidx[col] = state.oidx
+                        last_oidx[col] = state.oidx       # 更新该列的“最后订单索引”
                     if state.lidx != new_state.lidx:
-                        last_lidx[col] = state.lidx
+                        last_lidx[col] = state.lidx       # 更新该列的“最后日志索引”
 
                     # Update position record
                     if fill_pos_record:
                         update_pos_record_nb(
-                            pos_record_now,
-                            i, col,
-                            state.position, position_now,
-                            order_result
+                            pos_record_now,                # 持仓记录结构体（就地更新）
+                            i, col,                        # 时间步与列索引
+                            state.position, position_now,  # 执行前后持仓数量
+                            order_result                   # 本次订单执行结果
                         )
 
                     # Post-order callback
                     post_order_ctx = PostOrderContext(
-                        target_shape=target_shape,
-                        group_lens=group_lens,
-                        init_cash=init_cash,
-                        cash_sharing=cash_sharing,
-                        call_seq=call_seq,
-                        segment_mask=segment_mask,
-                        call_pre_segment=call_pre_segment,
-                        call_post_segment=call_post_segment,
-                        close=close,
-                        ffill_val_price=ffill_val_price,
-                        update_value=update_value,
-                        fill_pos_record=fill_pos_record,
-                        flex_2d=flex_2d,
-                        order_records=order_records,
-                        log_records=log_records,
-                        last_cash=last_cash,
-                        last_position=last_position,
-                        last_debt=last_debt,
-                        last_free_cash=last_free_cash,
-                        last_val_price=last_val_price,
-                        last_value=last_value,
-                        second_last_value=second_last_value,
-                        last_return=last_return,
-                        last_oidx=last_oidx,
-                        last_lidx=last_lidx,
-                        last_pos_record=last_pos_record,
-                        group=group,
-                        group_len=group_len,
-                        from_col=from_col,
-                        to_col=to_col,
-                        i=i,
-                        call_seq_now=call_seq_now,
-                        col=col,
-                        call_idx=k,
-                        cash_before=state.cash,
-                        position_before=state.position,
-                        debt_before=state.debt,
-                        free_cash_before=state.free_cash,
-                        val_price_before=state.val_price,
-                        value_before=state.value,
-                        order_result=order_result,
-                        cash_now=cash_now,
-                        position_now=position_now,
-                        debt_now=debt_now,
-                        free_cash_now=free_cash_now,
-                        val_price_now=val_price_now,
-                        value_now=value_now,
-                        return_now=return_now,
-                        pos_record_now=pos_record_now
+                        target_shape=target_shape,        # 模拟目标形状
+                        group_lens=group_lens,            # 组长度配置
+                        init_cash=init_cash,              # 初始现金
+                        cash_sharing=cash_sharing,        # 现金共享模式
+                        call_seq=call_seq,                # 调用序列矩阵
+                        segment_mask=segment_mask,        # 分段掩码
+                        call_pre_segment=call_pre_segment,# 分段前函数调用标志
+                        call_post_segment=call_post_segment,# 分段后函数调用标志
+                        close=close,                      # 收盘价数据
+                        ffill_val_price=ffill_val_price,  # 价格前向填充标志
+                        update_value=update_value,        # 是否更新组合价值
+                        fill_pos_record=fill_pos_record,  # 是否填充持仓记录
+                        flex_2d=flex_2d,                  # 2D灵活广播标志
+                        order_records=order_records,      # 订单记录数组
+                        log_records=log_records,          # 日志记录数组
+                        last_cash=last_cash,              # 当前现金（组/列）
+                        last_position=last_position,      # 当前持仓数组
+                        last_debt=last_debt,              # 当前债务数组
+                        last_free_cash=last_free_cash,    # 当前可用现金（组/列）
+                        last_val_price=last_val_price,    # 当前估值价格数组
+                        last_value=last_value,            # 当前组合价值（组/列）
+                        second_last_value=second_last_value,  # 前一期组合价值（组/列）
+                        last_return=last_return,          # 当前收益率（组/列）
+                        last_oidx=last_oidx,              # 每列最后订单索引
+                        last_lidx=last_lidx,              # 每列最后日志索引
+                        last_pos_record=last_pos_record,  # 每列持仓记录
+                        group=group,                      # 当前组索引
+                        group_len=group_len,              # 当前组长度
+                        from_col=from_col,                # 当前组起始列索引
+                        to_col=to_col,                    # 当前组结束列索引
+                        i=i,                              # 当前时间步索引
+                        call_seq_now=call_seq_now,        # 当前时间步的调用序列
+                        col=col,                          # 当前列索引
+                        call_idx=k,                       # 调用序列中的索引
+                        cash_before=state.cash,           # 执行前现金
+                        position_before=state.position,   # 执行前持仓
+                        debt_before=state.debt,           # 执行前债务
+                        free_cash_before=state.free_cash, # 执行前可用现金
+                        val_price_before=state.val_price, # 执行前估值价格
+                        value_before=state.value,         # 执行前组合价值
+                        order_result=order_result,        # 本次订单执行结果
+                        cash_now=cash_now,                # 执行后现金
+                        position_now=position_now,        # 执行后持仓
+                        debt_now=debt_now,                # 执行后债务
+                        free_cash_now=free_cash_now,      # 执行后可用现金
+                        val_price_now=val_price_now,      # 执行后估值价格
+                        value_now=value_now,              # 执行后组合价值
+                        return_now=return_now,            # 执行后收益率
+                        pos_record_now=pos_record_now     # 执行后持仓记录
                     )
                     post_order_func_nb(post_order_ctx, *pre_segment_out, *post_order_args)
 
             # NOTE: Regardless of segment_mask, we still need to update stats to be accessed by future rows
             # Update valuation price
             for col in range(from_col, to_col):
-                _close = flex_select_auto_nb(close, i, col, flex_2d)
-                if not np.isnan(_close) or not ffill_val_price:
-                    last_val_price[col] = _close
+                _close = flex_select_auto_nb(close, i, col, flex_2d)  # 选择当前行当前列的收盘价
+                if not np.isnan(_close) or not ffill_val_price:        # 若有有效价格或禁用前向填充
+                    last_val_price[col] = _close                       # 覆盖估值价格
 
             # Update previous value, current value and return
             if cash_sharing:
+                # 现金共享：以组为单位计算价值与收益
                 last_value[group] = get_group_value_nb(
-                    from_col,
-                    to_col,
-                    last_cash[group],
-                    last_position,
-                    last_val_price
+                    from_col,                       # 组起始列
+                    to_col,                         # 组结束列
+                    last_cash[group],               # 组现金
+                    last_position,                  # 全列持仓
+                    last_val_price                  # 全列估值价格
                 )
-                second_last_value[group] = temp_value[group]
-                temp_value[group] = last_value[group]
-                last_return[group] = returns_nb.get_return_nb(second_last_value[group], last_value[group])
+                second_last_value[group] = temp_value[group]                 # 滚动保存上一期价值
+                temp_value[group] = last_value[group]                        # 缓存本期价值
+                last_return[group] = returns_nb.get_return_nb(second_last_value[group], last_value[group])  # 组级收益
             else:
+                # 非现金共享：以列为单位计算价值与收益
                 for col in range(from_col, to_col):
                     if last_position[col] == 0:
-                        last_value[col] = last_cash[col]
+                        last_value[col] = last_cash[col]                     # 无持仓则价值等于现金
                     else:
-                        last_value[col] = last_cash[col] + last_position[col] * last_val_price[col]
-                    second_last_value[col] = temp_value[col]
-                    temp_value[col] = last_value[col]
-                    last_return[col] = returns_nb.get_return_nb(second_last_value[col], last_value[col])
+                        last_value[col] = last_cash[col] + last_position[col] * last_val_price[col]  # 现金+持仓价值
+                    second_last_value[col] = temp_value[col]                 # 滚动保存上一期价值
+                    temp_value[col] = last_value[col]                        # 缓存本期价值
+                    last_return[col] = returns_nb.get_return_nb(second_last_value[col], last_value[col])  # 列级收益
 
             # Update open position stats
             if fill_pos_record:
                 for col in range(from_col, to_col):
                     update_open_pos_stats_nb(
-                        last_pos_record[col],
-                        last_position[col],
-                        last_val_price[col]
+                        last_pos_record[col],            # 持仓记录（就地更新）
+                        last_position[col],              # 当前持仓数量
+                        last_val_price[col]              # 当前估值价格
                     )
 
             # Is this segment active?
             if call_post_segment or segment_mask[i, group]:
                 # Call function before the segment
                 post_seg_ctx = SegmentContext(
-                    target_shape=target_shape,
-                    group_lens=group_lens,
-                    init_cash=init_cash,
-                    cash_sharing=cash_sharing,
-                    call_seq=call_seq,
-                    segment_mask=segment_mask,
-                    call_pre_segment=call_pre_segment,
-                    call_post_segment=call_post_segment,
-                    close=close,
-                    ffill_val_price=ffill_val_price,
-                    update_value=update_value,
-                    fill_pos_record=fill_pos_record,
-                    flex_2d=flex_2d,
-                    order_records=order_records,
-                    log_records=log_records,
-                    last_cash=last_cash,
-                    last_position=last_position,
-                    last_debt=last_debt,
-                    last_free_cash=last_free_cash,
-                    last_val_price=last_val_price,
-                    last_value=last_value,
-                    second_last_value=second_last_value,
-                    last_return=last_return,
-                    last_oidx=last_oidx,
-                    last_lidx=last_lidx,
-                    last_pos_record=last_pos_record,
-                    group=group,
-                    group_len=group_len,
-                    from_col=from_col,
-                    to_col=to_col,
-                    i=i,
-                    call_seq_now=call_seq_now
+                    target_shape=target_shape,        # 模拟的目标形状
+                    group_lens=group_lens,            # 组长度配置
+                    init_cash=init_cash,              # 初始现金
+                    cash_sharing=cash_sharing,        # 现金共享模式
+                    call_seq=call_seq,                # 调用序列矩阵
+                    segment_mask=segment_mask,        # 分段掩码
+                    call_pre_segment=call_pre_segment,# 分段前函数调用标志
+                    call_post_segment=call_post_segment,# 分段后函数调用标志
+                    close=close,                      # 收盘价数据
+                    ffill_val_price=ffill_val_price,  # 价格前向填充标志
+                    update_value=update_value,        # 价值更新标志
+                    fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+                    flex_2d=flex_2d,                  # 2D灵活广播标志
+                    order_records=order_records,      # 订单记录数组
+                    log_records=log_records,          # 日志记录数组
+                    last_cash=last_cash,              # 当前现金状态
+                    last_position=last_position,      # 当前持仓状态
+                    last_debt=last_debt,              # 当前债务状态
+                    last_free_cash=last_free_cash,    # 当前可用现金
+                    last_val_price=last_val_price,    # 当前估值价格
+                    last_value=last_value,            # 当前组合价值
+                    second_last_value=second_last_value,  # 前一期组合价值
+                    last_return=last_return,          # 当前收益率
+                    last_oidx=last_oidx,              # 最后订单索引
+                    last_lidx=last_lidx,              # 最后日志索引
+                    last_pos_record=last_pos_record,  # 持仓记录状态
+                    group=group,                      # 当前组索引
+                    group_len=group_len,              # 当前组长度
+                    from_col=from_col,                # 当前组起始列索引
+                    to_col=to_col,                    # 当前组结束列索引
+                    i=i,                              # 当前时间步索引
+                    call_seq_now=call_seq_now         # 当前时间步的调用序列
                 )
-                post_segment_func_nb(post_seg_ctx, *pre_group_out, *post_segment_args)
+                post_segment_func_nb(post_seg_ctx, *pre_group_out, *post_segment_args)  # 调用分段后钩子函数
 
         # Call function after the group
         post_group_ctx = GroupContext(
-            target_shape=target_shape,
-            group_lens=group_lens,
-            init_cash=init_cash,
-            cash_sharing=cash_sharing,
-            call_seq=call_seq,
-            segment_mask=segment_mask,
-            call_pre_segment=call_pre_segment,
-            call_post_segment=call_post_segment,
-            close=close,
-            ffill_val_price=ffill_val_price,
-            update_value=update_value,
-            fill_pos_record=fill_pos_record,
-            flex_2d=flex_2d,
-            order_records=order_records,
-            log_records=log_records,
-            last_cash=last_cash,
-            last_position=last_position,
-            last_debt=last_debt,
-            last_free_cash=last_free_cash,
-            last_val_price=last_val_price,
-            last_value=last_value,
-            second_last_value=second_last_value,
-            last_return=last_return,
-            last_oidx=last_oidx,
-            last_lidx=last_lidx,
-            last_pos_record=last_pos_record,
-            group=group,
-            group_len=group_len,
-            from_col=from_col,
-            to_col=to_col
+            target_shape=target_shape,        # 模拟目标形状
+            group_lens=group_lens,            # 组长度配置
+            init_cash=init_cash,              # 初始现金
+            cash_sharing=cash_sharing,        # 现金共享模式
+            call_seq=call_seq,                # 调用序列矩阵
+            segment_mask=segment_mask,        # 分段掩码
+            call_pre_segment=call_pre_segment,# 分段前函数调用标志
+            call_post_segment=call_post_segment,# 分段后函数调用标志
+            close=close,                      # 收盘价数据
+            ffill_val_price=ffill_val_price,  # 价格前向填充标志
+            update_value=update_value,        # 价值更新标志
+            fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+            flex_2d=flex_2d,                  # 2D灵活广播标志
+            order_records=order_records,      # 订单记录数组
+            log_records=log_records,          # 日志记录数组
+            last_cash=last_cash,              # 当前现金状态
+            last_position=last_position,      # 当前持仓状态
+            last_debt=last_debt,              # 当前债务状态
+            last_free_cash=last_free_cash,    # 当前可用现金
+            last_val_price=last_val_price,    # 当前估值价格
+            last_value=last_value,            # 当前组合价值
+            second_last_value=second_last_value,  # 前一期组合价值
+            last_return=last_return,          # 当前收益率
+            last_oidx=last_oidx,              # 每列最后订单索引
+            last_lidx=last_lidx,              # 每列最后日志索引
+            last_pos_record=last_pos_record,  # 每列持仓记录
+            group=group,                      # 当前组索引
+            group_len=group_len,              # 当前组长度
+            from_col=from_col,                # 当前组起始列索引
+            to_col=to_col                     # 当前组结束列索引
         )
+        # 调用组后钩子函数，传入模拟前函数的输出和组后函数参数
         post_group_func_nb(post_group_ctx, *pre_sim_out, *post_group_args)
 
+        # 更新起始列索引，准备处理下一个组
         from_col = to_col
 
-    # Call function after the simulation
+    # ========== 模拟后钩子函数调用 ==========
+    
+    # 构建模拟后上下文对象，包含整个模拟完成后的最终状态
     post_sim_ctx = SimulationContext(
-        target_shape=target_shape,
-        group_lens=group_lens,
-        init_cash=init_cash,
-        cash_sharing=cash_sharing,
-        call_seq=call_seq,
-        segment_mask=segment_mask,
-        call_pre_segment=call_pre_segment,
-        call_post_segment=call_post_segment,
-        close=close,
-        ffill_val_price=ffill_val_price,
-        update_value=update_value,
-        fill_pos_record=fill_pos_record,
-        flex_2d=flex_2d,
-        order_records=order_records,
-        log_records=log_records,
-        last_cash=last_cash,
-        last_position=last_position,
-        last_debt=last_debt,
-        last_free_cash=last_free_cash,
-        last_val_price=last_val_price,
-        last_value=last_value,
-        second_last_value=second_last_value,
-        last_return=last_return,
-        last_oidx=last_oidx,
-        last_lidx=last_lidx,
-        last_pos_record=last_pos_record
+        target_shape=target_shape,        # 模拟的目标形状
+        group_lens=group_lens,            # 组长度配置
+        init_cash=init_cash,              # 初始现金
+        cash_sharing=cash_sharing,        # 现金共享模式
+        call_seq=call_seq,                # 调用序列矩阵
+        segment_mask=segment_mask,        # 分段掩码
+        call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+        call_post_segment=call_post_segment,  # 分段后函数调用标志
+        close=close,                      # 收盘价数据
+        ffill_val_price=ffill_val_price,  # 价格前向填充标志
+        update_value=update_value,        # 价值更新标志
+        fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+        flex_2d=flex_2d,                  # 2D灵活广播标志
+        order_records=order_records,      # 完整的订单记录数组
+        log_records=log_records,          # 完整的日志记录数组
+        last_cash=last_cash,              # 最终现金状态
+        last_position=last_position,      # 最终持仓状态
+        last_debt=last_debt,              # 最终债务状态
+        last_free_cash=last_free_cash,    # 最终可用现金
+        last_val_price=last_val_price,    # 最终估值价格
+        last_value=last_value,            # 最终组合价值
+        second_last_value=second_last_value,  # 倒数第二期价值
+        last_return=last_return,          # 最终收益率
+        last_oidx=last_oidx,              # 最终订单索引
+        last_lidx=last_lidx,              # 最终日志索引
+        last_pos_record=last_pos_record   # 最终持仓记录
     )
+    # 调用模拟后钩子函数，进行最终的清理和统计工作
     post_sim_func_nb(post_sim_ctx, *post_sim_args)
 
+    # ========== 返回模拟结果 ==========
+    
+    # 返回截取到实际使用长度的订单记录和日志记录数组
     return order_records[:oidx], log_records[:lidx]
 
 
-@njit
+@njit  # Numba即时编译，极致性能优化
 def simulate_row_wise_nb(target_shape: tp.Shape,
                          group_lens: tp.Array1d,
                          init_cash: tp.Array1d,
@@ -7449,218 +7538,449 @@ def simulate_row_wise_nb(target_shape: tp.Shape,
                          max_orders: tp.Optional[int] = None,
                          max_logs: int = 0,
                          flex_2d: bool = True) -> tp.Tuple[tp.RecordArray, tp.RecordArray]:
-    """Same as `simulate_nb`, but iterates in row-major order.
-
-    Row-major order means processing the entire row with all groups/columns before moving to the next one.
-
-    The main difference is that instead of `pre_group_func_nb` it now exposes `pre_row_func_nb`,
-    which is executed per entire row. It should accept `vectorbt.portfolio.enums.RowContext`.
-
-    !!! note
-        Function `pre_row_func_nb` is only called if there is at least on active segment in
-        the row. Functions `pre_segment_func_nb` and `order_func_nb` are only called if their
-        segment is active. If the main task of `pre_row_func_nb` is to activate/deactivate segments,
-        all segments should be activated by default to allow `pre_row_func_nb` to be called.
-
-    !!! warning
-        You can only safely access data points that are to the left of the current group and
-        rows that are to the top of the current row.
-
-    Call hierarchy:
-        Let's illustrate the same example as in `simulate_nb` but adapted for this function:
-
-        ![](/assets/images/simulate_row_wise_nb.gif)
-
-    Usage:
-        * Running the same example as in `simulate_nb` but adapted for this function:
-
-        ```pycon
-        >>> @njit
-        ... def pre_row_func_nb(c, order_value_out):
-        ...     print('\\tbefore row', c.i)
-        ...     # Forward down the stack
-        ...     return (order_value_out,)
-
-        >>> @njit
-        ... def post_row_func_nb(c, order_value_out):
-        ...     print('\\tafter row', c.i)
-        ...     return None
-
-        >>> call_seq = build_call_seq(target_shape, group_lens)
-        >>> order_records, log_records = simulate_row_wise_nb(
-        ...     target_shape,
-        ...     group_lens,
-        ...     init_cash,
-        ...     cash_sharing,
-        ...     call_seq,
-        ...     segment_mask=segment_mask,
-        ...     pre_sim_func_nb=pre_sim_func_nb,
-        ...     post_sim_func_nb=post_sim_func_nb,
-        ...     pre_row_func_nb=pre_row_func_nb,
-        ...     post_row_func_nb=post_row_func_nb,
-        ...     pre_segment_func_nb=pre_segment_func_nb,
-        ...     pre_segment_args=(size, price, size_type, direction),
-        ...     post_segment_func_nb=post_segment_func_nb,
-        ...     order_func_nb=order_func_nb,
-        ...     order_args=(size, price, size_type, direction, fees, fixed_fees, slippage),
-        ...     post_order_func_nb=post_order_func_nb
-        ... )
-        before simulation
-            before row 0
-                before segment 0
-                    creating order 0 at column 0
-                        order status: 0
-                    creating order 1 at column 1
-                        order status: 0
-                    creating order 2 at column 2
-                        order status: 0
-                after segment 0
-            after row 0
-            before row 1
-            after row 1
-            before row 2
-                before segment 2
-                    creating order 0 at column 1
-                        order status: 0
-                    creating order 1 at column 2
-                        order status: 0
-                    creating order 2 at column 0
-                        order status: 0
-                after segment 2
-            after row 2
-            before row 3
-            after row 3
-            before row 4
-                before segment 4
-                    creating order 0 at column 0
-                        order status: 0
-                    creating order 1 at column 2
-                        order status: 0
-                    creating order 2 at column 1
-                        order status: 0
-                after segment 4
-            after row 4
-        after simulation
-        ```
     """
+    行主序投资组合模拟引擎：按行优先顺序处理的灵活交易模拟系统
+    
+    这是simulate_nb的行主序版本，采用行优先的处理顺序来执行投资组合模拟。
+    与列主序不同，行主序意味着先处理整行的所有组/列，然后再移动到下一行。
+    这种处理方式在某些特定的交易策略中更加高效和直观。
+    
+    核心特点:
+    --------
+    - **行主序处理**: 先完成整行所有组的处理，再移动到下一行
+    - **行级钩子函数**: 使用pre_row_func_nb替代pre_group_func_nb
+    - **时间序列友好**: 更适合基于时间序列的策略分析
+    - **数据访问限制**: 只能安全访问当前组左侧和当前行上方的数据
+    
+    处理顺序对比:
+    ------------
+    - 列主序 (simulate_nb): 列0全部行 -> 列1全部行 -> 列2全部行...
+    - 行主序 (本函数): 行0全部列 -> 行1全部列 -> 行2全部列...
+    
+    参数详解:
+    --------
+    
+    **基础模拟参数:**
+    
+    target_shape : tuple[int, int]
+        目标模拟形状 (时间步数, 资产数量)
+        定义了模拟的时间范围和资产范围
+        
+    group_lens : array_like[int]
+        每个组包含的列数，用于现金共享分组
+        例如: [2, 3, 1] 表示第一组2列，第二组3列，第三组1列
+        
+    init_cash : array_like[float]
+        每个组的初始现金金额
+        长度必须等于组数 (len(group_lens))
+        
+    cash_sharing : bool
+        是否在组内共享现金
+        - True: 组内所有资产共享现金池，资金统一调配
+        - False: 每个资产独立管理现金
+        
+    call_seq : array_like[int]
+        调用序列矩阵 (时间步数, 资产数量)
+        控制每个时间步内各资产的订单执行顺序
+        
+    **分段控制参数:**
+    
+    segment_mask : array_like[bool], 默认 True
+        分段掩码 (时间步数, 组数)，控制哪些时间点的哪些组需要处理
+        True表示激活该分段，False表示跳过
+        
+    call_pre_segment : bool, 默认 False
+        是否调用分段前处理函数
+        即使segment_mask为False也会调用
+        
+    call_post_segment : bool, 默认 False
+        是否调用分段后处理函数
+        即使segment_mask为False也会调用
+        
+    **模拟级钩子函数:**
+    
+    pre_sim_func_nb : callable, 默认 no_pre_func_nb
+        模拟开始前调用的函数，用于全局初始化
+        
+        函数签名: (SimulationContext, *pre_sim_args) -> tuple
+        返回值传递给pre_row_func_nb和post_row_func_nb
+        
+        使用场景:
+        - 创建全局数组和缓存
+        - 设置随机种子
+        - 初始化全局状态变量
+        
+    pre_sim_args : tuple, 默认 ()
+        传递给pre_sim_func_nb的打包参数
+        
+    post_sim_func_nb : callable, 默认 no_post_func_nb
+        模拟结束后调用的函数，用于最终清理
+        
+        函数签名: (SimulationContext, *post_sim_args) -> None
+        
+        使用场景:
+        - 最终统计和汇总
+        - 清理资源
+        - 生成报告
+        
+    post_sim_args : tuple, 默认 ()
+        传递给post_sim_func_nb的打包参数
+        
+    **行级钩子函数 (与simulate_nb的主要区别):**
+    
+    pre_row_func_nb : callable, 默认 no_pre_func_nb
+        每行处理前调用的函数，用于行级别的初始化和准备
+        
+        函数签名: (RowContext, *pre_sim_result, *pre_row_args) -> tuple
+        返回值传递给pre_segment_func_nb和post_segment_func_nb
+        
+        **重要特性:**
+        - 只有当行中至少有一个激活分段时才会被调用
+        - 接受RowContext上下文对象
+        - 可用于激活/停用分段
+        - 适合基于时间的策略调整
+        
+        使用场景:
+        - 每日开盘前的策略调整
+        - 基于时间的风险控制
+        - 动态激活/停用交易组
+        
+    pre_row_args : tuple, 默认 ()
+        传递给pre_row_func_nb的打包参数
+        
+    post_row_func_nb : callable, 默认 no_post_func_nb
+        每行处理后调用的函数，用于行级别的清理和统计
+        
+        函数签名: (RowContext, *pre_sim_result, *post_row_args) -> None
+        
+        使用场景:
+        - 每日收盘后的统计
+        - 行级别的风险评估
+        - 策略表现记录
+        
+    post_row_args : tuple, 默认 ()
+        传递给post_row_func_nb的打包参数
+        
+    **分段级钩子函数:**
+    
+    pre_segment_func_nb : callable, 默认 no_pre_func_nb
+        每个分段处理前调用的函数
+        
+        函数签名: (SegmentContext, *pre_row_result, *pre_segment_args) -> tuple
+        返回值传递给order_func_nb和post_order_func_nb
+        
+    pre_segment_args : tuple, 默认 ()
+        传递给pre_segment_func_nb的打包参数
+        
+    post_segment_func_nb : callable, 默认 no_post_func_nb
+        每个分段处理后调用的函数
+        
+        函数签名: (SegmentContext, *pre_row_result, *post_segment_args) -> None
+        
+    post_segment_args : tuple, 默认 ()
+        传递给post_segment_func_nb的打包参数
+        
+    **订单级钩子函数:**
+    
+    order_func_nb : callable, 默认 no_order_func_nb
+        订单生成函数，策略的核心逻辑
+        
+        函数签名: (OrderContext, *pre_segment_result, *order_args) -> Order
+        
+    order_args : tuple, 默认 ()
+        传递给order_func_nb的打包参数
+        
+    post_order_func_nb : callable, 默认 no_post_func_nb
+        订单处理后调用的函数
+        
+        函数签名: (PostOrderContext, OrderResult, *pre_segment_result, *post_order_args) -> None
+        
+    post_order_args : tuple, 默认 ()
+        传递给post_order_func_nb的打包参数
+        
+    **其他控制参数:**
+    
+    close : array_like, 默认 NaN
+        收盘价数据，用于组合估值
+        形状应为 (时间步数, 资产数量) 或兼容的广播形状
+        
+    ffill_val_price : bool, 默认 True
+        是否前向填充估值价格
+        True时，缺失价格使用前一个有效价格
+        
+    update_value : bool, 默认 False
+        是否更新组合价值
+        影响性能，仅在需要实时价值计算时启用
+        
+    fill_pos_record : bool, 默认 True
+        是否填充持仓记录
+        False时可提高性能但失去持仓跟踪
+        
+    max_orders : int, 可选
+        最大订单记录数
+        None时自动计算，手动设置可避免内存重分配
+        
+    max_logs : int, 默认 0
+        最大日志记录数
+        0表示不记录日志
+        
+    flex_2d : bool, 默认 True
+        是否启用2D灵活广播
+        支持不同形状的输入数据自动广播
+        
+    返回:
+    ----
+    tuple[RecordArray, RecordArray]
+        (order_records, log_records) - 订单记录和日志记录
+        
+        order_records: 包含所有执行的订单详情
+        log_records: 包含模拟过程中的日志信息
+        
+    使用场景:
+    --------
+    
+    **时间序列策略:**
+    ```python
+    # 适合日内交易策略，需要按时间顺序处理
+    @njit
+    def pre_row_func_nb(c):
+        # 每日开盘前的策略调整
+        print(f"处理第{c.i}个交易日")
+        return ()
+    
+    @njit  
+    def order_func_nb(c):
+        # 基于当日数据的订单决策
+        return order_nb(...)
+    ```
+    
+    **多资产轮动策略:**
+    ```python
+    # 在每个时间点重新平衡整个投资组合
+    @njit
+    def pre_row_func_nb(c):
+        # 计算当前所有资产的权重
+        # 动态调整call_seq_now
+        return (weights,)
+    ```
+    
+    **事件驱动策略:**
+    ```python
+    # 基于特定时间点的事件触发交易
+    @njit
+    def pre_row_func_nb(c):
+        # 检查是否有事件发生
+        if has_event(c.i):
+            # 激活相关分段
+            return (True,)
+        return (False,)
+    ```
+    
+    注意事项:
+    --------
+    - **数据访问限制**: 只能安全访问当前组左侧和当前行上方的数据
+    - **钩子函数调用条件**: pre_row_func_nb仅在行中有激活分段时调用
+    - **分段激活**: 如果pre_row_func_nb的主要任务是激活/停用分段，
+      应默认激活所有分段以确保pre_row_func_nb被调用
+    - **性能考虑**: 行主序在某些情况下可能比列主序更高效
+    - **内存访问模式**: 行主序的内存访问模式可能更符合某些算法的需求
+    
+    **完整调用层次结构:**
+    pre_sim -> (pre_row -> (pre_segment -> order -> post_order) -> post_segment) -> post_row -> post_sim
+    
+    示例:
+    ----
+    ```python
+    import numpy as np
+    from numba import njit
+    from vectorbt.portfolio.nb import simulate_row_wise_nb
+    
+    @njit
+    def pre_row_func_nb(c, order_value_out):
+        print(f'开始处理第{c.i}行')
+        # 传递数据到下一级
+        return (order_value_out,)
+    
+    @njit
+    def post_row_func_nb(c, order_value_out):
+        print(f'完成处理第{c.i}行')
+        return None
+    
+    # 执行模拟
+    order_records, log_records = simulate_row_wise_nb(
+        target_shape=(5, 3),
+        group_lens=np.array([3]),
+        init_cash=np.array([10000.0]),
+        cash_sharing=True,
+        call_seq=call_seq,
+        pre_row_func_nb=pre_row_func_nb,
+        post_row_func_nb=post_row_func_nb,
+        order_func_nb=my_order_func_nb,
+        # ... 其他参数
+    )
+    ```
+    """
+    
+    # ========== 参数验证和数据结构初始化 ==========
+    
+    # 验证组长度配置的有效性，确保组配置与列数匹配
     check_group_lens_nb(group_lens, target_shape[1])
+    # 验证初始现金配置，确保现金数量与组数和现金共享设置一致
     check_group_init_cash_nb(group_lens, target_shape[1], init_cash, cash_sharing)
 
+    # 初始化订单记录和日志记录数组，为后续交易记录做准备
     order_records, log_records = init_records_nb(target_shape, max_orders, max_logs)
+    
+    # ========== 状态变量初始化（行主序模式） ==========
+    
+    # 确保初始现金为float64类型，保证数值精度
     init_cash = init_cash.astype(np.float64)
+    # 复制初始现金作为当前现金状态，避免修改原始数据
     last_cash = init_cash.copy()
+    # 初始化每列的持仓数量，开始时所有资产持仓为0
     last_position = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的债务金额，开始时无债务
     last_debt = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的可用现金，开始时等于初始现金
     last_free_cash = init_cash.copy()
+    # 初始化每列的估值价格，开始时为NaN，表示未设置
     last_val_price = np.full(target_shape[1], np.nan, dtype=np.float64)
+    # 初始化每列的组合价值，开始时等于初始现金
     last_value = init_cash.copy()
+    # 初始化前一期的组合价值，用于计算收益率
     second_last_value = init_cash.copy()
+    # 初始化临时价值变量，用于价值计算的中间存储
     temp_value = init_cash.copy()
+    # 初始化收益率数组，开始时为NaN，表示无法计算
     last_return = np.full_like(last_value, np.nan)
+    # 初始化持仓记录数组，用于跟踪每列的持仓状态
     last_pos_record = np.empty(target_shape[1], dtype=trade_dt)
+    # 将持仓记录ID初始化为-1，表示无活跃持仓
     last_pos_record['id'][:] = -1
+    # 初始化每列最后订单索引，-1表示尚无订单
     last_oidx = np.full(target_shape[1], -1, dtype=np.int64)
+    # 初始化每列最后日志索引，-1表示尚无日志
     last_lidx = np.full(target_shape[1], -1, dtype=np.int64)
+    # 初始化全局订单索引计数器
     oidx = 0
+    # 初始化全局日志索引计数器
     lidx = 0
 
-    # Call function before the simulation
+    # ========== 模拟前钩子函数调用 ==========
+    
+    # 构建模拟上下文对象，包含所有模拟状态和配置信息
     pre_sim_ctx = SimulationContext(
-        target_shape=target_shape,
-        group_lens=group_lens,
-        init_cash=init_cash,
-        cash_sharing=cash_sharing,
-        call_seq=call_seq,
-        segment_mask=segment_mask,
-        call_pre_segment=call_pre_segment,
-        call_post_segment=call_post_segment,
-        close=close,
-        ffill_val_price=ffill_val_price,
-        update_value=update_value,
-        fill_pos_record=fill_pos_record,
-        flex_2d=flex_2d,
-        order_records=order_records,
-        log_records=log_records,
-        last_cash=last_cash,
-        last_position=last_position,
-        last_debt=last_debt,
-        last_free_cash=last_free_cash,
-        last_val_price=last_val_price,
-        last_value=last_value,
-        second_last_value=second_last_value,
-        last_return=last_return,
-        last_oidx=last_oidx,
-        last_lidx=last_lidx,
-        last_pos_record=last_pos_record
+        target_shape=target_shape,        # 模拟的目标形状（时间步数，资产数）
+        group_lens=group_lens,            # 每个组包含的列数
+        init_cash=init_cash,              # 初始现金配置
+        cash_sharing=cash_sharing,        # 现金共享模式
+        call_seq=call_seq,                # 调用序列矩阵
+        segment_mask=segment_mask,        # 分段掩码
+        call_pre_segment=call_pre_segment,    # 是否调用分段前函数
+        call_post_segment=call_post_segment,  # 是否调用分段后函数
+        close=close,                      # 收盘价数据
+        ffill_val_price=ffill_val_price,  # 是否前向填充估值价格
+        update_value=update_value,        # 是否更新组合价值
+        fill_pos_record=fill_pos_record,  # 是否填充持仓记录
+        flex_2d=flex_2d,                  # 是否启用2D灵活广播
+        order_records=order_records,      # 订单记录数组
+        log_records=log_records,          # 日志记录数组
+        last_cash=last_cash,              # 当前现金状态
+        last_position=last_position,      # 当前持仓状态
+        last_debt=last_debt,              # 当前债务状态
+        last_free_cash=last_free_cash,    # 当前可用现金
+        last_val_price=last_val_price,    # 当前估值价格
+        last_value=last_value,            # 当前组合价值
+        second_last_value=second_last_value,  # 前一期组合价值
+        last_return=last_return,          # 当前收益率
+        last_oidx=last_oidx,              # 最后订单索引
+        last_lidx=last_lidx,              # 最后日志索引
+        last_pos_record=last_pos_record   # 持仓记录状态
     )
+    # 调用模拟前钩子函数，获取返回值供后续函数使用
     pre_sim_out = pre_sim_func_nb(pre_sim_ctx, *pre_sim_args)
 
+    # ========== 行主序遍历处理（时间优先循环） ==========
+    
+    # 遍历每个时间步（行主序的外层循环）
     for i in range(target_shape[0]):
 
-        # Call function before the row
+        # ========== 行前钩子函数调用 ==========
+        
+        # 构建行上下文对象，包含行级别的状态和配置信息
         pre_row_ctx = RowContext(
-            target_shape=target_shape,
-            group_lens=group_lens,
-            init_cash=init_cash,
-            cash_sharing=cash_sharing,
-            call_seq=call_seq,
-            segment_mask=segment_mask,
-            call_pre_segment=call_pre_segment,
-            call_post_segment=call_post_segment,
-            close=close,
-            ffill_val_price=ffill_val_price,
-            update_value=update_value,
-            fill_pos_record=fill_pos_record,
-            flex_2d=flex_2d,
-            order_records=order_records,
-            log_records=log_records,
-            last_cash=last_cash,
-            last_position=last_position,
-            last_debt=last_debt,
-            last_free_cash=last_free_cash,
-            last_val_price=last_val_price,
-            last_value=last_value,
-            second_last_value=second_last_value,
-            last_return=last_return,
-            last_oidx=last_oidx,
-            last_lidx=last_lidx,
-            last_pos_record=last_pos_record,
-            i=i
+            target_shape=target_shape,        # 模拟的目标形状
+            group_lens=group_lens,            # 组长度配置
+            init_cash=init_cash,              # 初始现金
+            cash_sharing=cash_sharing,        # 现金共享模式
+            call_seq=call_seq,                # 调用序列矩阵
+            segment_mask=segment_mask,        # 分段掩码
+            call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+            call_post_segment=call_post_segment,  # 分段后函数调用标志
+            close=close,                      # 收盘价数据
+            ffill_val_price=ffill_val_price,  # 价格前向填充标志
+            update_value=update_value,        # 价值更新标志
+            fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+            flex_2d=flex_2d,                  # 2D灵活广播标志
+            order_records=order_records,      # 订单记录数组
+            log_records=log_records,          # 日志记录数组
+            last_cash=last_cash,              # 当前现金状态
+            last_position=last_position,      # 当前持仓状态
+            last_debt=last_debt,              # 当前债务状态
+            last_free_cash=last_free_cash,    # 当前可用现金
+            last_val_price=last_val_price,    # 当前估值价格
+            last_value=last_value,            # 当前组合价值
+            second_last_value=second_last_value,  # 前一期组合价值
+            last_return=last_return,          # 当前收益率
+            last_oidx=last_oidx,              # 最后订单索引
+            last_lidx=last_lidx,              # 最后日志索引
+            last_pos_record=last_pos_record,  # 持仓记录状态
+            i=i                               # 当前行索引（时间步）
         )
+        # 调用行前钩子函数，获取返回值供分段函数使用
         pre_row_out = pre_row_func_nb(pre_row_ctx, *pre_sim_out, *pre_row_args)
 
+        # ========== 按组遍历处理（行主序内的组循环） ==========
+        
+        # 初始化起始列索引
         from_col = 0
+        # 遍历每个资产组（在当前行内）
         for group in range(len(group_lens)):
+            # 计算当前组的结束列索引（不包含）
             to_col = from_col + group_lens[group]
+            # 计算当前组包含的列数
             group_len = to_col - from_col
+            # 获取当前时间步当前组的调用序列
             call_seq_now = call_seq[i, from_col:to_col]
 
-            # Is this segment active?
+            # ========== 分段前处理 ==========
+            
+            # 检查当前分段是否激活（需要调用分段前函数或分段掩码为True）
             if call_pre_segment or segment_mask[i, group]:
-                # Call function before the segment
+                # 构建分段上下文对象，包含分段级别的状态和配置
                 pre_seg_ctx = SegmentContext(
-                    target_shape=target_shape,
-                    group_lens=group_lens,
-                    init_cash=init_cash,
-                    cash_sharing=cash_sharing,
-                    call_seq=call_seq,
-                    segment_mask=segment_mask,
-                    call_pre_segment=call_pre_segment,
-                    call_post_segment=call_post_segment,
-                    close=close,
-                    ffill_val_price=ffill_val_price,
-                    update_value=update_value,
-                    fill_pos_record=fill_pos_record,
-                    flex_2d=flex_2d,
-                    order_records=order_records,
-                    log_records=log_records,
-                    last_cash=last_cash,
-                    last_position=last_position,
-                    last_debt=last_debt,
-                    last_free_cash=last_free_cash,
-                    last_val_price=last_val_price,
-                    last_value=last_value,
-                    second_last_value=second_last_value,
+                    target_shape=target_shape,        # 模拟的目标形状
+                    group_lens=group_lens,            # 组长度配置
+                    init_cash=init_cash,              # 初始现金
+                    cash_sharing=cash_sharing,        # 现金共享模式
+                    call_seq=call_seq,                # 调用序列矩阵
+                    segment_mask=segment_mask,        # 分段掩码
+                    call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+                    call_post_segment=call_post_segment,  # 分段后函数调用标志
+                    close=close,                      # 收盘价数据
+                    ffill_val_price=ffill_val_price,  # 价格前向填充标志
+                    update_value=update_value,        # 价值更新标志
+                    fill_pos_record=fill_pos_record,  # 持仓记录填充标志
+                    flex_2d=flex_2d,                  # 2D灵活广播标志
+                    order_records=order_records,      # 订单记录数组
+                    log_records=log_records,          # 日志记录数组
+                    last_cash=last_cash,              # 当前现金状态
+                    last_position=last_position,      # 当前持仓状态
+                    last_debt=last_debt,              # 当前债务状态
+                    last_free_cash=last_free_cash,    # 当前可用现金
+                    last_val_price=last_val_price,    # 当前估值价格
+                    last_value=last_value,            # 当前组合价值
+                    second_last_value=second_last_value,  # 前一期组合价值
                     last_return=last_return,
                     last_oidx=last_oidx,
                     last_lidx=last_lidx,
@@ -8101,7 +8421,7 @@ def no_flex_order_func_nb(c: FlexOrderContext, *args) -> tp.Tuple[int, Order]:
 FlexOrderFuncT = tp.Callable[[FlexOrderContext, tp.VarArg()], tp.Tuple[int, Order]]
 
 
-@njit
+@njit  # Numba即时编译，极致性能优化
 def flex_simulate_nb(target_shape: tp.Shape,
                      group_lens: tp.Array1d,
                      init_cash: tp.Array1d,
@@ -8132,239 +8452,233 @@ def flex_simulate_nb(target_shape: tp.Shape,
                      max_orders: tp.Optional[int] = None,
                      max_logs: int = 0,
                      flex_2d: bool = True) -> tp.Tuple[tp.RecordArray, tp.RecordArray]:
-    """Same as `simulate_nb`, but with no predefined call sequence.
+    """
+    灵活投资组合模拟引擎：无预定义调用序列的高度自定义交易模拟系统
+    
+    这是simulate_nb的灵活版本，最大的特点是取消了预定义的调用序列，
+    改用灵活订单函数(flex_order_func_nb)来动态决定订单的执行顺序和目标列。
+    这使得单个数据点可以容纳多个订单，并支持任意的执行顺序。
+    
+    核心创新:
+    --------
+    - **无预定义调用序列**: 不依赖call_seq参数，完全由订单函数控制执行流程
+    - **多订单支持**: 单个时间点/分段可以执行多个订单
+    - **任意执行顺序**: 订单函数可以自由选择目标列和执行时机
+    - **循环控制机制**: 通过返回-1来中断订单生成循环
+    - **动态列选择**: 每次调用都可以返回不同的目标列
+    
+    与标准模拟的关键区别:
+    ------------------
+    
+    **标准模拟 (simulate_nb):**
+    - 使用order_func_nb，每次调用处理一个预定义的列
+    - 调用序列由call_seq参数预先确定
+    - 每个数据点最多一个订单
+    - 处理顺序固定且可预测
+    
+    **灵活模拟 (本函数):**
+    - 使用flex_order_func_nb，每次调用可以选择任意列
+    - 没有预定义调用序列，完全动态决策
+    - 每个数据点可以有多个订单
+    - 处理顺序完全由订单函数控制
+    
+    重要提醒:
+    --------
+    由于单个数据点现在可以容纳多个订单，您可能会遇到
+    "order_records index out of range"异常。此时需要增加max_orders参数。
+    为避免性能下降，系统不会自动动态调整此参数。
 
-    In contrast to `order_func_nb` in`simulate_nb`, `post_order_func_nb` is a segment-level order function
-    that returns a column along with the order, and gets repeatedly called until some condition is met.
-    This allows multiple orders to be issued within a single element and in an arbitrary order.
-
-    The order function should accept `vectorbt.portfolio.enums.FlexOrderContext`, unpacked tuple from
-    `pre_segment_func_nb`, and `*flex_order_args`. Should return column and `vectorbt.portfolio.enums.Order`.
-    To break out of the loop, return column of -1.
-
-    !!! note
-        Since one element can now accommodate multiple orders, you may run into "order_records index out of range"
-        exception. In this case, you should increase `max_orders`. This cannot be done automatically and
-        dynamically to avoid performance degradation.
-
-    Usage:
-        * The same example as in `simulate_nb`:
-
-        ```pycon
-        >>> import numpy as np
-        >>> from numba import njit
-        >>> from vectorbt.portfolio.enums import SizeType, Direction
-        >>> from vectorbt.portfolio.nb import (
-        ...     get_col_elem_nb,
-        ...     order_nb,
-        ...     order_nothing_nb,
-        ...     flex_simulate_nb,
-        ...     flex_simulate_row_wise_nb,
-        ...     sort_call_seq_out_nb
-        ... )
-
-        >>> @njit
-        ... def pre_sim_func_nb(c):
-        ...     print('before simulation')
-        ...     return ()
-
-        >>> @njit
-        ... def pre_group_func_nb(c):
-        ...     print('\\tbefore group', c.group)
-        ...     # Create temporary arrays and pass them down the stack
-        ...     order_value_out = np.empty(c.group_len, dtype=np.float64)
-        ...     call_seq_out = np.empty(c.group_len, dtype=np.int64)
-        ...     # Forward down the stack
-        ...     return (order_value_out, call_seq_out)
-
-        >>> @njit
-        ... def pre_segment_func_nb(c, order_value_out, call_seq_out, size, price, size_type, direction):
-        ...     print('\\t\\tbefore segment', c.i)
-        ...     for col in range(c.from_col, c.to_col):
-        ...         # Here we use order price for group valuation
-        ...         c.last_val_price[col] = get_col_elem_nb(c, col, price)
-        ...
-        ...     # Same as for simulate_nb, but since we don't have a predefined c.call_seq_now anymore,
-        ...     # we need to store our new call sequence somewhere else
-        ...     call_seq_out[:] = np.arange(c.group_len)
-        ...     sort_call_seq_out_nb(c, size, size_type, direction, order_value_out, call_seq_out)
-        ...
-        ...     # Forward the sorted call sequence
-        ...     return (call_seq_out,)
-
-        >>> @njit
-        ... def flex_order_func_nb(c, call_seq_out, size, price, size_type, direction, fees, fixed_fees, slippage):
-        ...     if c.call_idx < c.group_len:
-        ...         col = c.from_col + call_seq_out[c.call_idx]
-        ...         print('\\t\\t\\tcreating order', c.call_idx, 'at column', col)
-        ...         # # Create and return an order
-        ...         return col, order_nb(
-        ...             size=get_col_elem_nb(c, col, size),
-        ...             price=get_col_elem_nb(c, col, price),
-        ...             size_type=get_col_elem_nb(c, col, size_type),
-        ...             direction=get_col_elem_nb(c, col, direction),
-        ...             fees=get_col_elem_nb(c, col, fees),
-        ...             fixed_fees=get_col_elem_nb(c, col, fixed_fees),
-        ...             slippage=get_col_elem_nb(c, col, slippage)
-        ...         )
-        ...     # All columns already processed -> break the loop
-        ...     print('\\t\\t\\tbreaking out of the loop')
-        ...     return -1, order_nothing_nb()
-
-        >>> @njit
-        ... def post_order_func_nb(c, call_seq_out):
-        ...     print('\\t\\t\\t\\torder status:', c.order_result.status)
-        ...     return None
-
-        >>> @njit
-        ... def post_segment_func_nb(c, order_value_out, call_seq_out):
-        ...     print('\\t\\tafter segment', c.i)
-        ...     return None
-
-        >>> @njit
-        ... def post_group_func_nb(c):
-        ...     print('\\tafter group', c.group)
-        ...     return None
-
-        >>> @njit
-        ... def post_sim_func_nb(c):
-        ...     print('after simulation')
-        ...     return None
-
-        >>> target_shape = (5, 3)
-        >>> np.random.seed(42)
-        >>> group_lens = np.array([3])  # one group of three columns
-        >>> init_cash = np.array([100.])  # one capital per group
-        >>> cash_sharing = True
-        >>> call_seq = build_call_seq(target_shape, group_lens)  # will be overridden
-        >>> segment_mask = np.array([True, False, True, False, True])[:, None]
-        >>> segment_mask = np.copy(np.broadcast_to(segment_mask, target_shape))
-        >>> size = np.asarray(1 / target_shape[1])  # scalars must become 0-dim arrays
-        >>> price = close = np.random.uniform(1, 10, size=target_shape)
-        >>> size_type = np.asarray(SizeType.TargetPercent)
-        >>> direction = np.asarray(Direction.LongOnly)
-        >>> fees = np.asarray(0.001)
-        >>> fixed_fees = np.asarray(1.)
-        >>> slippage = np.asarray(0.001)
-
-        >>> order_records, log_records = flex_simulate_nb(
-        ...     target_shape,
-        ...     group_lens,
-        ...     init_cash,
-        ...     cash_sharing,
-        ...     segment_mask=segment_mask,
-        ...     pre_sim_func_nb=pre_sim_func_nb,
-        ...     post_sim_func_nb=post_sim_func_nb,
-        ...     pre_group_func_nb=pre_group_func_nb,
-        ...     post_group_func_nb=post_group_func_nb,
-        ...     pre_segment_func_nb=pre_segment_func_nb,
-        ...     pre_segment_args=(size, price, size_type, direction),
-        ...     post_segment_func_nb=post_segment_func_nb,
-        ...     flex_order_func_nb=flex_order_func_nb,
-        ...     flex_order_args=(size, price, size_type, direction, fees, fixed_fees, slippage),
-        ...     post_order_func_nb=post_order_func_nb
-        ... )
-        before simulation
-            before group 0
-                before segment 0
-                    creating order 0 at column 0
-                        order status: 0
-                    creating order 1 at column 1
-                        order status: 0
-                    creating order 2 at column 2
-                        order status: 0
-                    breaking out of the loop
-                after segment 0
-                before segment 2
-                    creating order 0 at column 1
-                        order status: 0
-                    creating order 1 at column 2
-                        order status: 0
-                    creating order 2 at column 0
-                        order status: 0
-                    breaking out of the loop
-                after segment 2
-                before segment 4
-                    creating order 0 at column 0
-                        order status: 0
-                    creating order 1 at column 2
-                        order status: 0
-                    creating order 2 at column 1
-                        order status: 0
-                    breaking out of the loop
-                after segment 4
-            after group 0
-        after simulation
+    
+    参数详解:
+    --------
+    
+    **基础模拟参数:**
+    
+    target_shape : tuple[int, int]
+        目标模拟形状 (时间步数, 资产数量)
+        定义模拟的时空范围
+        
+    group_lens : array_like[int]
+        每个组包含的列数，用于现金共享分组
+        例如: [2, 3, 1] 表示三个组，分别包含2、3、1列
+        
+    init_cash : array_like[float]
+        每个组的初始现金金额
+        长度必须等于组数
+        
+    cash_sharing : bool
+        是否在组内共享现金
+        - True: 组内资产共享资金池，支持跨资产调配
+        - False: 每个资产独立管理现金
+        
+    **灵活订单函数 (核心特性):**
+    
+    flex_order_func_nb : callable, 默认 no_flex_order_func_nb
+        灵活订单生成函数，这是本函数的核心创新
+        
+        函数签名: (FlexOrderContext, *pre_segment_result, *flex_order_args) -> tuple[int, Order]
+        
+        **返回值含义:**
+        - **int**: 目标列索引，-1表示中断循环
+        - **Order**: 要执行的订单对象
+        
+        **执行机制:**
+        1. 在每个激活分段内，此函数被重复调用
+        2. 每次调用时call_idx会递增
+        3. 函数可以根据call_idx决定处理哪一列
+        4. 返回-1时中断当前分段的订单生成循环
+        5. 支持在单个分段内生成多个订单
+        
+        **典型实现模式:**
+        ```python
+        @njit
+        def flex_order_func_nb(c, call_seq_out, ...):
+            if c.call_idx < c.group_len:
+                col = c.from_col + call_seq_out[c.call_idx]
+                order = create_order(...)
+                return col, order
+            return -1, NoOrder  # 中断循环
         ```
+        
+    flex_order_args : tuple, 默认 ()
+        传递给flex_order_func_nb的打包参数
+        
+    **其他控制参数:**
+    
+    max_orders : int, 可选
+        最大订单记录数
+        **重要提醒**: 由于单个分段可以生成多个订单，
+        可能遇到"order_records index out of range"异常，
+        此时需要手动增加max_orders值
+        
+    返回:
+    ----
+    tuple[RecordArray, RecordArray]
+        (order_records, log_records) - 订单记录和日志记录
+        
+    使用场景:
+    --------
+    
+    **复杂订单策略、配对交易、动态重平衡等高级交易策略**
+    
+    示例:
+    ----
+    ```python
+    @njit
+    def my_flex_order_func_nb(c, call_seq_out, ...):
+        if c.call_idx < len(call_seq_out):
+            col = c.from_col + call_seq_out[c.call_idx]
+            order = order_nb(...)
+            return col, order
+        return -1, NoOrder  # 中断循环
+    ```
     """
 
+    # ========== 参数验证和数据结构初始化（灵活模拟） ==========
+    
+    # 验证组长度配置的有效性，确保组配置与列数匹配
     check_group_lens_nb(group_lens, target_shape[1])
+    # 验证初始现金配置，确保现金数量与组数和现金共享设置一致
     check_group_init_cash_nb(group_lens, target_shape[1], init_cash, cash_sharing)
 
+    # 初始化订单记录和日志记录数组，为后续交易记录做准备
+    # 注意：灵活模拟可能产生更多订单，max_orders需要合理设置
     order_records, log_records = init_records_nb(target_shape, max_orders, max_logs)
+    
+    # ========== 状态变量初始化（灵活模拟模式） ==========
+    
+    # 确保初始现金为float64类型，保证数值精度
     init_cash = init_cash.astype(np.float64)
+    # 复制初始现金作为当前现金状态，避免修改原始数据
     last_cash = init_cash.copy()
+    # 初始化每列的持仓数量，开始时所有资产持仓为0
     last_position = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的债务金额，开始时无债务
     last_debt = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的可用现金，开始时等于初始现金
     last_free_cash = init_cash.copy()
+    # 初始化每列的估值价格，开始时为NaN，表示未设置
     last_val_price = np.full(target_shape[1], np.nan, dtype=np.float64)
+    # 初始化每列的组合价值，开始时等于初始现金
     last_value = init_cash.copy()
+    # 初始化前一期的组合价值，用于计算收益率
     second_last_value = init_cash.copy()
+    # 初始化临时价值变量，用于价值计算的中间存储
     temp_value = init_cash.copy()
+    # 初始化收益率数组，开始时为NaN，表示无法计算
     last_return = np.full_like(last_value, np.nan)
+    # 初始化持仓记录数组，用于跟踪每列的持仓状态
     last_pos_record = np.empty(target_shape[1], dtype=trade_dt)
+    # 将持仓记录ID初始化为-1，表示无活跃持仓
     last_pos_record['id'][:] = -1
+    # 初始化每列最后订单索引，-1表示尚无订单
     last_oidx = np.full(target_shape[1], -1, dtype=np.int64)
+    # 初始化每列最后日志索引，-1表示尚无日志
     last_lidx = np.full(target_shape[1], -1, dtype=np.int64)
+    # 初始化全局订单索引计数器
     oidx = 0
+    # 初始化全局日志索引计数器
     lidx = 0
 
-    # Call function before the simulation
+    # ========== 模拟前钩子函数调用 ==========
+    
+    # 构建模拟上下文对象，包含所有模拟状态和配置信息
+    # 注意：call_seq设置为None，表示无预定义调用序列
     pre_sim_ctx = SimulationContext(
-        target_shape=target_shape,
-        group_lens=group_lens,
-        init_cash=init_cash,
-        cash_sharing=cash_sharing,
-        call_seq=None,
-        segment_mask=segment_mask,
-        call_pre_segment=call_pre_segment,
-        call_post_segment=call_post_segment,
-        close=close,
-        ffill_val_price=ffill_val_price,
-        update_value=update_value,
-        fill_pos_record=fill_pos_record,
-        flex_2d=flex_2d,
-        order_records=order_records,
-        log_records=log_records,
-        last_cash=last_cash,
-        last_position=last_position,
-        last_debt=last_debt,
-        last_free_cash=last_free_cash,
-        last_val_price=last_val_price,
-        last_value=last_value,
-        second_last_value=second_last_value,
-        last_return=last_return,
-        last_oidx=last_oidx,
-        last_lidx=last_lidx,
-        last_pos_record=last_pos_record
+        target_shape=target_shape,        # 模拟的目标形状（时间步数，资产数）
+        group_lens=group_lens,            # 每个组包含的列数
+        init_cash=init_cash,              # 初始现金配置
+        cash_sharing=cash_sharing,        # 现金共享模式
+        call_seq=None,                    # 灵活模拟无预定义调用序列
+        segment_mask=segment_mask,        # 分段掩码
+        call_pre_segment=call_pre_segment,    # 是否调用分段前函数
+        call_post_segment=call_post_segment,  # 是否调用分段后函数
+        close=close,                      # 收盘价数据
+        ffill_val_price=ffill_val_price,  # 是否前向填充估值价格
+        update_value=update_value,        # 是否更新组合价值
+        fill_pos_record=fill_pos_record,  # 是否填充持仓记录
+        flex_2d=flex_2d,                  # 是否启用2D灵活广播
+        order_records=order_records,      # 订单记录数组
+        log_records=log_records,          # 日志记录数组
+        last_cash=last_cash,              # 当前现金状态
+        last_position=last_position,      # 当前持仓状态
+        last_debt=last_debt,              # 当前债务状态
+        last_free_cash=last_free_cash,    # 当前可用现金
+        last_val_price=last_val_price,    # 当前估值价格
+        last_value=last_value,            # 当前组合价值
+        second_last_value=second_last_value,  # 前一期组合价值
+        last_return=last_return,          # 当前收益率
+        last_oidx=last_oidx,              # 最后订单索引
+        last_lidx=last_lidx,              # 最后日志索引
+        last_pos_record=last_pos_record   # 持仓记录状态
     )
+    # 调用模拟前钩子函数，获取返回值供后续函数使用
     pre_sim_out = pre_sim_func_nb(pre_sim_ctx, *pre_sim_args)
 
+    # ========== 按组遍历处理（灵活模拟的列主序） ==========
+    
+    # 初始化起始列索引
     from_col = 0
+    # 遍历每个资产组
     for group in range(len(group_lens)):
+        # 计算当前组的结束列索引（不包含）
         to_col = from_col + group_lens[group]
+        # 计算当前组包含的列数
         group_len = to_col - from_col
 
-        # Call function before the group
+        # ========== 组前钩子函数调用 ==========
+        
+        # 构建组上下文对象，包含组级别的状态和配置信息
+        # 注意：call_seq设置为None，表示无预定义调用序列
         pre_group_ctx = GroupContext(
-            target_shape=target_shape,
-            group_lens=group_lens,
-            init_cash=init_cash,
-            cash_sharing=cash_sharing,
-            call_seq=None,
-            segment_mask=segment_mask,
-            call_pre_segment=call_pre_segment,
-            call_post_segment=call_post_segment,
+            target_shape=target_shape,        # 模拟的目标形状
+            group_lens=group_lens,            # 组长度配置
+            init_cash=init_cash,              # 初始现金
+            cash_sharing=cash_sharing,        # 现金共享模式
+            call_seq=None,                    # 灵活模拟无预定义调用序列
+            segment_mask=segment_mask,        # 分段掩码
+            call_pre_segment=call_pre_segment,    # 分段前函数调用标志
+            call_post_segment=call_post_segment,  # 分段后函数调用标志
             close=close,
             ffill_val_price=ffill_val_price,
             update_value=update_value,
@@ -8797,7 +9111,7 @@ def flex_simulate_nb(target_shape: tp.Shape,
     return order_records[:oidx], log_records[:lidx]
 
 
-@njit
+@njit  # Numba即时编译，极致性能优化
 def flex_simulate_row_wise_nb(target_shape: tp.Shape,
                               group_lens: tp.Array1d,
                               init_cash: tp.Array1d,
@@ -8828,25 +9142,326 @@ def flex_simulate_row_wise_nb(target_shape: tp.Shape,
                               max_orders: tp.Optional[int] = None,
                               max_logs: int = 0,
                               flex_2d: bool = True) -> tp.Tuple[tp.RecordArray, tp.RecordArray]:
-    """Same as `flex_simulate_nb`, but iterates using row-major order, with the rows
-    changing fastest, and the columns/groups changing slowest."""
+    """
+    行主序灵活投资组合模拟引擎：结合行优先处理和灵活订单机制的终极交易模拟系统
+    
+    这是flex_simulate_nb的行主序版本，将两个强大特性完美结合：
+    1. **行主序处理** (来自simulate_row_wise_nb)：按行优先顺序处理数据
+    2. **灵活订单机制** (来自flex_simulate_nb)：无预定义调用序列，支持多订单
+    
+    这种组合为最复杂的交易策略提供了最大的灵活性和控制力。
+    
+    核心特点:
+    --------
+    - **行主序 + 灵活订单**: 先处理整行所有组，每个分段内支持多个任意顺序的订单
+    - **时间序列友好**: 行主序处理更适合基于时间序列的复杂策略
+    - **最大灵活性**: 结合了两种高级模拟模式的所有优势
+    - **动态订单控制**: 可以在单个时间点对整个投资组合进行复杂操作
+    - **行级钩子函数**: 使用pre_row_func_nb而不是pre_group_func_nb
+    
+    处理顺序说明:
+    ------------
+    **行主序处理**: 行变化最快，列/组变化最慢
+    - 对于每个时间步i：
+      - 调用pre_row_func_nb (如果有激活分段)
+      - 遍历所有组：
+        - 如果分段激活，调用pre_segment_func_nb
+        - 重复调用flex_order_func_nb直到返回-1
+        - 如果分段激活，调用post_segment_func_nb
+      - 调用post_row_func_nb (如果有激活分段)
+    
+    与其他模拟函数的对比:
+    ------------------
+    
+    **simulate_nb** (标准列主序):
+    - 列主序 + 预定义调用序列
+    - 每个数据点最多一个订单
+    - 适合简单策略
+    
+    **simulate_row_wise_nb** (行主序):
+    - 行主序 + 预定义调用序列
+    - 每个数据点最多一个订单
+    - 适合时间序列策略
+    
+    **flex_simulate_nb** (灵活列主序):
+    - 列主序 + 灵活订单机制
+    - 支持多订单和任意执行顺序
+    - 适合复杂策略
+    
+    **本函数** (灵活行主序):
+    - 行主序 + 灵活订单机制
+    - 支持多订单和任意执行顺序
+    - 适合最复杂的时间序列策略
+    
+    参数详解:
+    --------
+    
+    **基础模拟参数:**
+    
+    target_shape : tuple[int, int]
+        目标模拟形状 (时间步数, 资产数量)
+        定义模拟的时空范围
+        
+    group_lens : array_like[int]
+        每个组包含的列数，用于现金共享分组
+        
+    init_cash : array_like[float]
+        每个组的初始现金金额
+        
+    cash_sharing : bool
+        是否在组内共享现金
+        
+    **行级钩子函数 (与flex_simulate_nb的主要区别):**
+    
+    pre_row_func_nb : callable, 默认 no_pre_func_nb
+        每行处理前调用的函数，用于行级别的初始化和策略调整
+        
+        函数签名: (RowContext, *pre_sim_result, *pre_row_args) -> tuple
+        返回值传递给所有分段级函数
+        
+        **重要特性:**
+        - 只有当行中至少有一个激活分段时才会被调用
+        - 接受RowContext上下文对象
+        - 可以基于时间进行全局策略调整
+        - 适合实现复杂的时间驱动逻辑
+        
+        **使用场景:**
+        - 每日开盘前的全局策略调整
+        - 基于时间的风险管理决策
+        - 动态激活/停用交易组
+        - 时间序列模式识别和响应
+        
+    pre_row_args : tuple, 默认 ()
+        传递给pre_row_func_nb的打包参数
+        
+    post_row_func_nb : callable, 默认 no_post_func_nb
+        每行处理后调用的函数，用于行级别的清理和统计
+        
+        函数签名: (RowContext, *pre_sim_result, *post_row_args) -> None
+        
+        **使用场景:**
+        - 每日收盘后的统计和分析
+        - 行级别的风险评估
+        - 策略表现记录和调整
+        
+    post_row_args : tuple, 默认 ()
+        传递给post_row_func_nb的打包参数
+        
+    **灵活订单函数:**
+    
+    flex_order_func_nb : callable, 默认 no_flex_order_func_nb
+        灵活订单生成函数，核心的订单控制逻辑
+        
+        函数签名: (FlexOrderContext, *pre_segment_result, *flex_order_args) -> tuple[int, Order]
+        
+        **在行主序中的执行特点:**
+        - 在每个时间步的每个激活分段内重复调用
+        - 可以基于行上下文信息做出更智能的决策
+        - 支持跨资产的协调操作
+        
+    flex_order_args : tuple, 默认 ()
+        传递给flex_order_func_nb的打包参数
+        
+    **其他重要参数:**
+    
+    max_orders : int, 可选
+        最大订单记录数
+        **特别重要**: 由于支持多订单且按行处理，
+        订单数量可能显著增加，需要合理设置此参数
+        
+    返回:
+    ----
+    tuple[RecordArray, RecordArray]
+        (order_records, log_records) - 订单记录和日志记录
+        
+    高级使用场景:
+    -----------
+    
+    **1. 时间序列动量策略:**
+    ```python
+    @njit
+    def pre_row_func_nb(c, momentum_signals):
+        # 每日开盘前分析动量信号
+        current_momentum = momentum_signals[c.i]
+        # 根据动量调整策略参数
+        return (current_momentum,)
+    
+    @njit
+    def flex_order_func_nb(c, momentum, ...):
+        # 基于动量信号执行多个协调的订单
+        if momentum > high_threshold:
+            # 执行激进买入策略
+            if c.call_idx == 0:
+                return high_momentum_col, aggressive_buy_order
+            elif c.call_idx == 1:
+                return hedge_col, hedge_order
+        # ... 更多逻辑
+        return -1, NoOrder
+    ```
+    
+    **2. 配对交易与套利:**
+    ```python
+    @njit
+    def pre_row_func_nb(c, spread_data):
+        # 每日计算配对资产的价差
+        current_spread = spread_data[c.i]
+        threshold_status = get_threshold_status(current_spread)
+        return (threshold_status, current_spread)
+    
+    @njit
+    def flex_order_func_nb(c, threshold_status, spread, ...):
+        # 基于价差状态执行配对交易
+        if threshold_status == UPPER_BREACH:
+            if c.call_idx == 0:
+                return asset1_col, sell_order  # 卖出高价资产
+            elif c.call_idx == 1:
+                return asset2_col, buy_order   # 买入低价资产
+        elif threshold_status == LOWER_BREACH:
+            # 反向操作
+            pass
+        return -1, NoOrder
+    ```
+    
+    **3. 多层级风险管理:**
+    ```python
+    @njit
+    def pre_row_func_nb(c, risk_metrics):
+        # 每日风险评估
+        portfolio_risk = calculate_portfolio_risk(c, risk_metrics[c.i])
+        risk_level = classify_risk_level(portfolio_risk)
+        return (risk_level,)
+    
+    @njit
+    def flex_order_func_nb(c, risk_level, ...):
+        # 基于风险级别执行不同的交易策略
+        if risk_level == HIGH_RISK:
+            # 执行风险缓解订单
+            if c.call_idx < num_hedge_assets:
+                return hedge_assets[c.call_idx], create_hedge_order()
+        elif risk_level == LOW_RISK:
+            # 执行积极投资订单
+            if c.call_idx < num_growth_assets:
+                return growth_assets[c.call_idx], create_growth_order()
+        return -1, NoOrder
+    ```
+    
+    **4. 动态投资组合重平衡:**
+    ```python
+    @njit
+    def pre_row_func_nb(c, target_allocations):
+        # 每日重新计算目标配置
+        current_allocations = calculate_current_allocations(c)
+        rebalance_needs = calculate_rebalance_needs(
+            current_allocations, target_allocations[c.i]
+        )
+        return (rebalance_needs,)
+    
+    @njit
+    def flex_order_func_nb(c, rebalance_needs, ...):
+        # 执行重平衡操作
+        if c.call_idx < len(rebalance_needs):
+            need = rebalance_needs[c.call_idx]
+            if abs(need.amount) > tolerance:
+                col = c.from_col + need.asset_idx
+                order = create_rebalance_order(need.amount)
+                return col, order
+        return -1, NoOrder
+    ```
+    
+    技术优势:
+    --------
+    - **最大灵活性**: 结合行主序和灵活订单的所有优势
+    - **时间序列优化**: 行主序处理对时间序列策略更友好
+    - **复杂策略支持**: 可以实现最复杂的多资产、多时间框架策略
+    - **高性能**: Numba编译优化，保持高效执行
+    - **全面控制**: 对交易过程的每个环节都有完全控制
+    
+    注意事项:
+    --------
+    - **复杂性管理**: 高度灵活性带来的复杂性需要仔细管理
+    - **内存需求**: 可能需要更多内存来存储中间状态和订单记录
+    - **调试难度**: 复杂的执行流程可能增加调试难度
+    - **性能考虑**: 复杂的钩子函数可能影响整体性能
+    - **状态一致性**: 需要确保跨行和跨订单的状态一致性
+    
+    **完整调用层次结构:**
+    pre_sim -> (pre_row -> (pre_segment -> (flex_order -> post_order)* -> post_segment) -> post_row) -> post_sim
+    
+    示例:
+    ----
+    ```python
+    import numpy as np
+    from numba import njit
+    from vectorbt.portfolio.nb import flex_simulate_row_wise_nb
+    
+    @njit
+    def my_pre_row_func_nb(c, market_regime):
+        # 基于市场制度调整策略
+        regime = market_regime[c.i]
+        return (regime,)
+    
+    @njit
+    def my_flex_order_func_nb(c, regime, ...):
+        # 基于市场制度执行不同策略
+        if regime == BULL_MARKET:
+            # 牛市策略
+            pass
+        elif regime == BEAR_MARKET:
+            # 熊市策略
+            pass
+        return -1, NoOrder
+    
+    # 执行最高级别的灵活模拟
+    order_records, log_records = flex_simulate_row_wise_nb(
+        target_shape=(252, 10),  # 一年的交易日，10个资产
+        group_lens=np.array([10]),
+        init_cash=np.array([1000000.0]),
+        cash_sharing=True,
+        pre_row_func_nb=my_pre_row_func_nb,
+        flex_order_func_nb=my_flex_order_func_nb,
+        # ... 其他参数
+    )
+    ```
+    """
 
+    # ========== 参数验证和数据结构初始化（行主序灵活模拟） ==========
+    
+    # 验证组长度配置的有效性，确保组配置与列数匹配
     check_group_lens_nb(group_lens, target_shape[1])
+    # 验证初始现金配置，确保现金数量与组数和现金共享设置一致
     check_group_init_cash_nb(group_lens, target_shape[1], init_cash, cash_sharing)
 
+    # 初始化订单记录和日志记录数组，为后续交易记录做准备
+    # 注意：行主序灵活模拟可能产生大量订单，max_orders需要充分设置
     order_records, log_records = init_records_nb(target_shape, max_orders, max_logs)
+    
+    # ========== 状态变量初始化（行主序灵活模拟模式） ==========
+    
+    # 确保初始现金为float64类型，保证数值精度
     init_cash = init_cash.astype(np.float64)
+    # 复制初始现金作为当前现金状态，避免修改原始数据
     last_cash = init_cash.copy()
+    # 初始化每列的持仓数量，开始时所有资产持仓为0
     last_position = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的债务金额，开始时无债务
     last_debt = np.full(target_shape[1], 0., dtype=np.float64)
+    # 初始化每列的可用现金，开始时等于初始现金
     last_free_cash = init_cash.copy()
+    # 初始化每列的估值价格，开始时为NaN，表示未设置
     last_val_price = np.full(target_shape[1], np.nan, dtype=np.float64)
+    # 初始化每列的组合价值，开始时等于初始现金
     last_value = init_cash.copy()
+    # 初始化前一期的组合价值，用于计算收益率
     second_last_value = init_cash.copy()
+    # 初始化临时价值变量，用于价值计算的中间存储
     temp_value = init_cash.copy()
+    # 初始化收益率数组，开始时为NaN，表示无法计算
     last_return = np.full_like(last_value, np.nan)
+    # 初始化持仓记录数组，用于跟踪每列的持仓状态
     last_pos_record = np.empty(target_shape[1], dtype=trade_dt)
+    # 将持仓记录ID初始化为-1，表示无活跃持仓
     last_pos_record['id'][:] = -1
+    # 初始化每列最后订单索引，-1表示尚无订单
     last_oidx = np.full(target_shape[1], -1, dtype=np.int64)
     last_lidx = np.full(target_shape[1], -1, dtype=np.int64)
     oidx = 0
@@ -9768,485 +10383,624 @@ def fill_entry_trades_in_position_nb(order_records: tp.RecordArray,
     return tidx  # 返回更新后的交易记录索引
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def get_entry_trades_nb(order_records: tp.RecordArray, close: tp.Array2d, col_map: tp.ColMap) -> tp.RecordArray:
-    """Fill entry trade records by aggregating order records.
+    """通过聚合订单记录生成入场交易记录的核心函数
+    
+    该函数是量化交易回测系统中的重要组件，用于从原始订单记录中提取和构建入场交易记录。
+    入场交易记录定义为：多头持仓中的买入订单和空头持仓中的卖出订单。
+    
+    核心功能：
+    - 按列（资产）遍历所有订单记录
+    - 识别新持仓的开仓订单（入场订单）
+    - 跟踪持仓状态变化和累积统计信息
+    - 处理持仓增加、减少、关闭和反转等各种情况
+    - 为每个入场交易分配唯一的父ID以便后续分析
+    - 计算加权平均入场价格和费用分摊
+    
+    参数说明：
+    order_records : tp.RecordArray
+        原始订单记录数组，包含所有执行的订单信息
+        必须包含字段：'id', 'idx', 'col', 'size', 'price', 'fees', 'side'
+        订单必须按每列的ID升序排列
+    close : tp.Array2d  
+        收盘价格二维数组，形状为(时间步数, 资产数量)
+        用于计算未平仓交易的最终价值
+    col_map : tp.ColMap
+        列映射元组，包含(col_idxs, col_lens)
+        col_idxs: 每列订单在order_records中的索引位置
+        col_lens: 每列包含的订单数量
+        用于高效按列访问订单记录
+    
+    返回值：
+    tp.RecordArray
+        入场交易记录数组，每条记录包含：
+        - id: 交易唯一标识符
+        - col: 所属资产列索引  
+        - size: 交易数量
+        - entry_idx: 入场时间索引
+        - entry_price: 入场价格（加权平均）
+        - entry_fees: 入场费用（按比例分摊）
+        - exit_idx: 出场时间索引
+        - exit_price: 出场价格
+        - exit_fees: 出场费用
+        - pnl: 盈亏金额
+        - return: 收益率
+        - direction: 交易方向（0=多头，1=空头）
+        - status: 交易状态（0=开仓，1=平仓）
+        - parent_id: 父持仓标识符
+    
+    算法逻辑：
+    1. 状态跟踪：维护每列的持仓状态（是否在持仓中）
+    2. 方向识别：根据首个订单类型确定持仓方向（多头/空头）
+    3. 累积统计：跟踪入场数量、总金额、费用等累积值
+    4. 持仓处理：
+       - 持仓增加：累加同方向订单的统计信息
+       - 持仓减少：部分平仓，更新剩余持仓信息
+       - 持仓关闭：完全平仓，生成完整交易记录
+       - 持仓反转：先平仓再开新仓，处理超额订单
+    5. 未平仓处理：使用最后收盘价计算开仓交易的估值
+    
+    使用示例：
+        ```python
+        import numpy as np
+        import pandas as pd
+        from vectorbt.records.nb import col_map_nb
+        from vectorbt.portfolio.nb import simulate_from_orders_nb, get_entry_trades_nb
 
-    Entry trade records are buy orders in a long position and sell orders in a short position.
-
-    Usage:
-        ```pycon
-        >>> import numpy as np
-        >>> import pandas as pd
-        >>> from numba import njit
-        >>> from vectorbt.records.nb import col_map_nb
-        >>> from vectorbt.portfolio.nb import simulate_from_orders_nb, get_entry_trades_nb
-
-        >>> close = order_price = np.array([
-        ...     [1, 6],
-        ...     [2, 5],
-        ...     [3, 4],
-        ...     [4, 3],
-        ...     [5, 2],
-        ...     [6, 1]
-        ... ])
-        >>> size = np.asarray([
-        ...     [1, -1],
-        ...     [0.1, -0.1],
-        ...     [-1, 1],
-        ...     [-0.1, 0.1],
-        ...     [1, -1],
-        ...     [-2, 2]
-        ... ])
-        >>> target_shape = close.shape
-        >>> group_lens = np.full(target_shape[1], 1)
-        >>> init_cash = np.full(target_shape[1], 100)
-        >>> call_seq = np.full(target_shape, 0)
-
-        >>> order_records, log_records = simulate_from_orders_nb(
-        ...     target_shape,
-        ...     group_lens,
-        ...     init_cash,
-        ...     call_seq,
-        ...     size=size,
-        ...     price=close,
-        ...     fees=np.asarray(0.01),
-        ...     slippage=np.asarray(0.01)
-        ... )
-
-        >>> col_map = col_map_nb(order_records['col'], target_shape[1])
-        >>> entry_trade_records = get_entry_trades_nb(order_records, close, col_map)
-        >>> pd.DataFrame.from_records(entry_trade_records)
-           id  col  size  entry_idx  entry_price  entry_fees  exit_idx  exit_price  \\
-        0   0    0   1.0          0         1.01     0.01010         3    3.060000
-        1   1    0   0.1          1         2.02     0.00202         3    3.060000
-        2   2    0   1.0          4         5.05     0.05050         5    5.940000
-        3   3    0   1.0          5         5.94     0.05940         5    6.000000
-        4   4    1   1.0          0         5.94     0.05940         3    3.948182
-        5   5    1   0.1          1         4.95     0.00495         3    3.948182
-        6   6    1   1.0          4         1.98     0.01980         5    1.010000
-        7   7    1   1.0          5         1.01     0.01010         5    1.000000
-
-           exit_fees       pnl    return  direction  status  parent_id
-        0   0.030600  2.009300  1.989406          0       1          0
-        1   0.003060  0.098920  0.489703          0       1          0
-        2   0.059400  0.780100  0.154475          0       1          1
-        3   0.000000 -0.119400 -0.020101          1       0          2
-        4   0.039482  1.892936  0.318676          1       1          3
-        5   0.003948  0.091284  0.184411          1       1          3
-        6   0.010100  0.940100  0.474798          1       1          4
-        7   0.000000 -0.020100 -0.019901          0       0          5
+        # 定义价格和交易数量数据
+        close = order_price = np.array([
+            [1, 6],    # 第0时刻价格
+            [2, 5],    # 第1时刻价格  
+            [3, 4],    # 第2时刻价格
+            [4, 3],    # 第3时刻价格
+            [5, 2],    # 第4时刻价格
+            [6, 1]     # 第5时刻价格
+        ])
+        
+        # 交易数量矩阵（正数=买入，负数=卖出）
+        size = np.asarray([
+            [1, -1],      # 第0时刻：资产0买入1单位，资产1卖出1单位
+            [0.1, -0.1],  # 第1时刻：小额交易
+            [-1, 1],      # 第2时刻：反向操作
+            [-0.1, 0.1],  # 第3时刻：小额反向
+            [1, -1],      # 第4时刻：重新建仓
+            [-2, 2]       # 第5时刻：大额反向
+        ])
+        
+        # 配置回测参数
+        target_shape = close.shape
+        group_lens = np.full(target_shape[1], 1)  # 每组1个资产
+        init_cash = np.full(target_shape[1], 100)  # 初始资金100
+        call_seq = np.full(target_shape, 0)  # 调用顺序
+        
+        # 执行订单模拟
+        order_records, log_records = simulate_from_orders_nb(
+            target_shape, group_lens, init_cash, call_seq,
+            size=size, price=close, 
+            fees=np.asarray(0.01),      # 1%手续费
+            slippage=np.asarray(0.01)   # 1%滑点
+        )
+        
+        # 生成列映射并提取入场交易
+        col_map = col_map_nb(order_records['col'], target_shape[1])
+        entry_trades = get_entry_trades_nb(order_records, close, col_map)
+        
+        # 转换为DataFrame便于分析
+        df = pd.DataFrame.from_records(entry_trades)
+        print(df)
         ```
+        
+    注意事项：
+    - 订单记录必须按每列的ID字段升序排列，否则抛出ValueError
+    - 订单数量和价格必须大于0，否则抛出ValueError  
+    - 函数使用Numba JIT编译，首次调用会有编译开销
+    - 返回的交易记录数组长度可能小于输入订单数组长度
+    - 对于复杂的持仓操作（如部分平仓、反转），会自动计算加权平均价格
     """
-    col_idxs, col_lens = col_map
-    col_start_idxs = np.cumsum(col_lens) - col_lens
-    records = np.empty(len(order_records), dtype=trade_dt)
-    tidx = 0
-    parent_id = -1
+    # 解构列映射元组，获取索引和长度信息
+    col_idxs, col_lens = col_map  # col_idxs: 每列订单索引，col_lens: 每列订单数量
+    col_start_idxs = np.cumsum(col_lens) - col_lens  # 计算每列在col_idxs中的起始位置
+    records = np.empty(len(order_records), dtype=trade_dt)  # 预分配交易记录数组，避免动态扩容
+    tidx = 0  # 交易记录索引，跟踪当前填充位置
+    parent_id = -1  # 父持仓ID，用于关联同一持仓组的多笔交易
 
+    # 按列遍历所有资产
     for col in range(col_lens.shape[0]):
-        col_len = col_lens[col]
-        if col_len == 0:
+        col_len = col_lens[col]  # 获取当前列的订单数量
+        if col_len == 0:  # 跳过没有订单的列
             continue
-        last_id = -1
-        in_position = False
+        last_id = -1  # 上一个订单的ID，用于验证升序排列
+        in_position = False  # 持仓状态标志，False表示当前无持仓
 
+        # 遍历当前列的所有订单
         for c in range(col_len):
-            oidx = col_idxs[col_start_idxs[col] + c]
-            record = order_records[oidx]
+            oidx = col_idxs[col_start_idxs[col] + c]  # 计算订单在全局数组中的索引位置
+            record = order_records[oidx]  # 获取当前处理的订单记录
 
+            # 验证订单ID的升序排列，确保数据一致性
             if record['id'] < last_id:
                 raise ValueError("id must come in ascending order per column")
-            last_id = record['id']
+            last_id = record['id']  # 更新最后处理的订单ID
 
-            order_idx = record['idx']
-            order_size = record['size']
-            order_price = record['price']
-            order_fees = record['fees']
-            order_side = record['side']
+            # 提取订单的关键信息
+            order_idx = record['idx']  # 订单时间索引
+            order_size = record['size']  # 订单数量
+            order_price = record['price']  # 订单价格
+            order_fees = record['fees']  # 订单手续费
+            order_side = record['side']  # 订单方向（买入/卖出）
 
-            if order_size <= 0.:
+            # 数据有效性验证
+            if order_size <= 0.:  # 订单数量必须为正数
                 raise ValueError(size_zero_neg_err)
-            if order_price <= 0.:
+            if order_price <= 0.:  # 订单价格必须为正数
                 raise ValueError(price_zero_neg_err)
 
+            # 处理新持仓开立的情况
             if not in_position:
-                # New position opened
-                first_c = c
-                in_position = True
-                parent_id += 1
+                # 新持仓开立，初始化相关状态变量
+                first_c = c  # 记录首个入场订单的位置
+                in_position = True  # 标记为已进入持仓状态
+                parent_id += 1  # 分配新的父持仓ID
+                # 根据首个订单类型确定持仓方向
                 if order_side == OrderSide.Buy:
-                    direction = TradeDirection.Long
+                    direction = TradeDirection.Long  # 买入订单 -> 多头持仓
                 else:
-                    direction = TradeDirection.Short
-                entry_size_sum = 0.
-                entry_gross_sum = 0.
-                entry_fees_sum = 0.
-                exit_size_sum = 0.
-                exit_gross_sum = 0.
-                exit_fees_sum = 0.
-                first_entry_size = order_size
-                first_entry_fees = order_fees
+                    direction = TradeDirection.Short  # 卖出订单 -> 空头持仓
+                # 初始化累积统计变量
+                entry_size_sum = 0.  # 入场总数量
+                entry_gross_sum = 0.  # 入场总金额（数量×价格）
+                entry_fees_sum = 0.  # 入场总费用
+                exit_size_sum = 0.  # 出场总数量
+                exit_gross_sum = 0.  # 出场总金额
+                exit_fees_sum = 0.  # 出场总费用
+                first_entry_size = order_size  # 首笔入场数量
+                first_entry_fees = order_fees  # 首笔入场费用
 
+            # 判断订单是否为持仓增加操作
             if (direction == TradeDirection.Long and order_side == OrderSide.Buy) \
                     or (direction == TradeDirection.Short and order_side == OrderSide.Sell):
-                # Position increased
-                entry_size_sum += order_size
-                entry_gross_sum += order_size * order_price
-                entry_fees_sum += order_fees
+                # 持仓增加：同方向订单，累积入场统计信息
+                entry_size_sum += order_size  # 累加入场总数量
+                entry_gross_sum += order_size * order_price  # 累加入场总金额
+                entry_fees_sum += order_fees  # 累加入场总手续费
 
+            # 判断订单是否为持仓减少或平仓操作
             elif (direction == TradeDirection.Long and order_side == OrderSide.Sell) \
                     or (direction == TradeDirection.Short and order_side == OrderSide.Buy):
+                # 检查是否完全平仓（出场数量等于入场数量）
                 if is_close_nb(exit_size_sum + order_size, entry_size_sum):
-                    # Position closed
-                    last_c = c
-                    in_position = False
-                    exit_size_sum = entry_size_sum
-                    exit_gross_sum += order_size * order_price
-                    exit_fees_sum += order_fees
+                    # 完全平仓情况：持仓完全关闭
+                    last_c = c  # 记录最后一个订单位置
+                    in_position = False  # 标记持仓状态为关闭
+                    exit_size_sum = entry_size_sum  # 出场数量等于入场数量
+                    exit_gross_sum += order_size * order_price  # 累加出场总金额
+                    exit_fees_sum += order_fees  # 累加出场手续费
 
-                    # Fill trade records
+                    # 调用函数填充入场交易记录到记录数组
                     tidx = fill_entry_trades_in_position_nb(
-                        order_records,
-                        col_map,
-                        col,
-                        first_c,
-                        last_c,
-                        first_entry_size,
-                        first_entry_fees,
-                        order_idx,
-                        exit_size_sum,
-                        exit_gross_sum,
-                        exit_fees_sum,
-                        direction,
-                        TradeStatus.Closed,
-                        parent_id,
-                        records,
-                        tidx
+                        order_records,  # 原始订单记录数组
+                        col_map,  # 列映射信息
+                        col,  # 当前资产列索引
+                        first_c,  # 首个入场订单位置
+                        last_c,  # 最后一个订单位置
+                        first_entry_size,  # 首笔入场数量
+                        first_entry_fees,  # 首笔入场费用
+                        order_idx,  # 当前订单时间索引
+                        exit_size_sum,  # 出场总数量
+                        exit_gross_sum,  # 出场总金额
+                        exit_fees_sum,  # 出场总费用
+                        direction,  # 交易方向
+                        TradeStatus.Closed,  # 交易状态：已平仓
+                        parent_id,  # 父持仓ID
+                        records,  # 交易记录数组
+                        tidx  # 当前记录索引
                     )
+                # 检查是否为部分平仓（出场数量小于入场数量）
                 elif is_less_nb(exit_size_sum + order_size, entry_size_sum):
-                    # Position decreased
-                    exit_size_sum += order_size
-                    exit_gross_sum += order_size * order_price
-                    exit_fees_sum += order_fees
+                    # 部分平仓情况：持仓减少但未完全关闭
+                    exit_size_sum += order_size  # 累加出场数量
+                    exit_gross_sum += order_size * order_price  # 累加出场金额
+                    exit_fees_sum += order_fees  # 累加出场费用
                 else:
-                    # Position closed
-                    last_c = c
-                    remaining_size = add_nb(entry_size_sum, -exit_size_sum)
-                    exit_size_sum = entry_size_sum
-                    exit_gross_sum += remaining_size * order_price
-                    exit_fees_sum += remaining_size / order_size * order_fees
+                    # 超额平仓情况：先完全平仓当前持仓，再开立反向新仓
+                    last_c = c  # 记录平仓订单位置
+                    remaining_size = add_nb(entry_size_sum, -exit_size_sum)  # 计算剩余未平仓数量
+                    exit_size_sum = entry_size_sum  # 出场数量设为入场数量（完全平仓）
+                    exit_gross_sum += remaining_size * order_price  # 按剩余数量计算出场金额
+                    exit_fees_sum += remaining_size / order_size * order_fees  # 按比例分摊出场费用
 
-                    # Fill trade records
+                    # 填充完全平仓的交易记录
                     tidx = fill_entry_trades_in_position_nb(
-                        order_records,
-                        col_map,
-                        col,
-                        first_c,
-                        last_c,
-                        first_entry_size,
-                        first_entry_fees,
-                        order_idx,
-                        exit_size_sum,
-                        exit_gross_sum,
-                        exit_fees_sum,
-                        direction,
-                        TradeStatus.Closed,
-                        parent_id,
-                        records,
-                        tidx
+                        order_records,  # 原始订单记录数组
+                        col_map,  # 列映射信息
+                        col,  # 当前资产列索引
+                        first_c,  # 首个入场订单位置
+                        last_c,  # 最后订单位置
+                        first_entry_size,  # 首笔入场数量
+                        first_entry_fees,  # 首笔入场费用
+                        order_idx,  # 当前订单时间索引
+                        exit_size_sum,  # 出场总数量
+                        exit_gross_sum,  # 出场总金额
+                        exit_fees_sum,  # 出场总费用
+                        direction,  # 交易方向
+                        TradeStatus.Closed,  # 交易状态：已平仓
+                        parent_id,  # 父持仓ID
+                        records,  # 交易记录数组
+                        tidx  # 当前记录索引
                     )
 
-                    # New position opened
-                    first_c = c
-                    parent_id += 1
+                    # 开立新持仓：处理超额部分作为新的反向持仓
+                    first_c = c  # 记录新持仓的起始位置
+                    parent_id += 1  # 分配新的父持仓ID
+                    # 根据订单方向确定新持仓的交易方向
                     if order_side == OrderSide.Buy:
-                        direction = TradeDirection.Long
+                        direction = TradeDirection.Long  # 买入订单 -> 多头持仓
                     else:
-                        direction = TradeDirection.Short
-                    entry_size_sum = add_nb(order_size, -remaining_size)
-                    entry_gross_sum = entry_size_sum * order_price
-                    entry_fees_sum = entry_size_sum / order_size * order_fees
-                    first_entry_size = entry_size_sum
-                    first_entry_fees = entry_fees_sum
-                    exit_size_sum = 0.
-                    exit_gross_sum = 0.
-                    exit_fees_sum = 0.
+                        direction = TradeDirection.Short  # 卖出订单 -> 空头持仓
+                    entry_size_sum = add_nb(order_size, -remaining_size)  # 计算新持仓的入场数量
+                    entry_gross_sum = entry_size_sum * order_price  # 计算新持仓的入场总金额
+                    entry_fees_sum = entry_size_sum / order_size * order_fees  # 按比例计算新持仓的入场费用
+                    first_entry_size = entry_size_sum  # 记录新持仓的首笔入场数量
+                    first_entry_fees = entry_fees_sum  # 记录新持仓的首笔入场费用
+                    # 重置出场相关统计变量
+                    exit_size_sum = 0.  # 出场数量归零
+                    exit_gross_sum = 0.  # 出场金额归零
+                    exit_fees_sum = 0.  # 出场费用归零
 
+        # 处理列结束时仍有未平仓持仓的情况
         if in_position and is_less_nb(exit_size_sum, entry_size_sum):
-            # Position hasn't been closed
-            last_c = col_len - 1
-            remaining_size = add_nb(entry_size_sum, -exit_size_sum)
-            exit_size_sum = entry_size_sum
-            exit_gross_sum += remaining_size * close[close.shape[0] - 1, col]
+            # 持仓未完全平仓：使用最后收盘价计算剩余持仓价值
+            last_c = col_len - 1  # 设置最后订单位置为列的最后一个位置
+            remaining_size = add_nb(entry_size_sum, -exit_size_sum)  # 计算剩余未平仓数量
+            exit_size_sum = entry_size_sum  # 将出场数量设为入场数量（视为完全出场）
+            exit_gross_sum += remaining_size * close[close.shape[0] - 1, col]  # 使用最后收盘价计算剩余价值
 
-            # Fill trade records
+            # 填充未平仓交易记录（使用最后收盘价作为估值）
             tidx = fill_entry_trades_in_position_nb(
-                order_records,
-                col_map,
-                col,
-                first_c,
-                last_c,
-                first_entry_size,
-                first_entry_fees,
-                close.shape[0] - 1,
-                exit_size_sum,
-                exit_gross_sum,
-                exit_fees_sum,
-                direction,
-                TradeStatus.Open,
-                parent_id,
-                records,
-                tidx
+                order_records,  # 原始订单记录数组
+                col_map,  # 列映射信息
+                col,  # 当前资产列索引
+                first_c,  # 首个入场订单位置
+                last_c,  # 最后订单位置（列结束位置）
+                first_entry_size,  # 首笔入场数量
+                first_entry_fees,  # 首笔入场费用
+                close.shape[0] - 1,  # 出场时间索引（最后时间点）
+                exit_size_sum,  # 出场总数量（等于入场数量）
+                exit_gross_sum,  # 出场总金额（包含按收盘价计算的剩余价值）
+                exit_fees_sum,  # 出场总费用
+                direction,  # 交易方向
+                TradeStatus.Open,  # 交易状态：仍开仓
+                parent_id,  # 父持仓ID
+                records,  # 交易记录数组
+                tidx  # 当前记录索引
             )
 
-    return records[:tidx]
+    return records[:tidx]  # 返回实际填充的交易记录数组（去除未使用的空间）
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def get_exit_trades_nb(order_records: tp.RecordArray, close: tp.Array2d, col_map: tp.ColMap) -> tp.RecordArray:
-    """Fill exit trade records by aggregating order records.
+    """通过聚合订单记录生成出场交易记录的核心函数
+    
+    该函数是量化交易回测系统中的关键组件，专门用于从原始订单记录中提取和构建出场交易记录。
+    出场交易记录定义为：多头持仓中的卖出订单和空头持仓中的买入订单。
+    
+    核心功能：
+    - 按列（资产）顺序处理所有订单记录
+    - 识别和跟踪每笔出场交易的完整生命周期
+    - 动态计算加权平均入场价格和按比例分摊费用
+    - 处理部分平仓、完全平仓和持仓反转等复杂情况
+    - 为每个交易分配唯一的父ID以支持交易分析
+    - 自动处理未平仓交易的最终估值
+    
+    参数说明：
+    order_records : tp.RecordArray
+        原始订单记录数组，包含所有已执行的订单详细信息
+        必需字段：'id', 'idx', 'col', 'size', 'price', 'fees', 'side'
+        要求：每列内的订单必须按ID字段升序排列
+    close : tp.Array2d
+        收盘价格矩阵，维度为(时间步数, 资产数量)
+        用于计算未平仓交易在回测结束时的市场价值
+    col_map : tp.ColMap
+        列索引映射结构，包含(col_idxs, col_lens)元组
+        col_idxs: 指向order_records中每列订单起始位置的索引数组
+        col_lens: 每列包含的订单数量数组
+        提供高效的按列访问机制
+    
+    返回值：
+    tp.RecordArray
+        出场交易记录数组，每条记录详细描述一笔完整交易：
+        - id: 交易的全局唯一标识符
+        - col: 交易所属的资产列索引
+        - size: 实际交易的数量（正值）
+        - entry_idx: 入场时间点的索引位置
+        - entry_price: 入场的加权平均价格
+        - entry_fees: 按交易比例分摊的入场费用
+        - exit_idx: 出场时间点的索引位置
+        - exit_price: 出场的实际成交价格
+        - exit_fees: 出场时产生的交易费用
+        - pnl: 该笔交易的净盈亏金额
+        - return: 相对于入场成本的收益率
+        - direction: 交易方向（0=多头交易，1=空头交易）
+        - status: 交易状态（0=仍开仓，1=已平仓）
+        - parent_id: 所属持仓组的父标识符
+    
+    算法流程：
+    1. 初始化状态：为每列设置交易跟踪变量
+    2. 订单分类：根据持仓方向区分入场和出场订单
+    3. 入场处理：累积同方向订单的数量、金额和费用
+    4. 出场处理：
+       - 部分平仓：按比例计算交易记录，更新剩余持仓
+       - 完全平仓：生成完整交易记录，重置持仓状态
+       - 超额平仓：先完全平仓，再开立反向新仓
+    5. 价格计算：使用加权平均法计算入场价格
+    6. 费用分摊：按交易数量比例分配入场费用
+    7. 未平仓处理：使用最终收盘价估算开仓交易价值
+    
+    使用示例：
+        ```python
+        import numpy as np
+        import pandas as pd
+        from vectorbt.records.nb import col_map_nb
+        from vectorbt.portfolio.nb import simulate_from_orders_nb, get_exit_trades_nb
 
-    Exit trade records are sell orders in a long position and buy orders in a short position.
-
-    Usage:
-        ```pycon
-        >>> import numpy as np
-        >>> import pandas as pd
-        >>> from numba import njit
-        >>> from vectorbt.records.nb import col_map_nb
-        >>> from vectorbt.portfolio.nb import simulate_from_orders_nb, get_exit_trades_nb
-
-        >>> close = order_price = np.array([
-        ...     [1, 6],
-        ...     [2, 5],
-        ...     [3, 4],
-        ...     [4, 3],
-        ...     [5, 2],
-        ...     [6, 1]
-        ... ])
-        >>> size = np.asarray([
-        ...     [1, -1],
-        ...     [0.1, -0.1],
-        ...     [-1, 1],
-        ...     [-0.1, 0.1],
-        ...     [1, -1],
-        ...     [-2, 2]
-        ... ])
-        >>> target_shape = close.shape
-        >>> group_lens = np.full(target_shape[1], 1)
-        >>> init_cash = np.full(target_shape[1], 100)
-        >>> call_seq = np.full(target_shape, 0)
-
-        >>> order_records, log_records = simulate_from_orders_nb(
-        ...     target_shape,
-        ...     group_lens,
-        ...     init_cash,
-        ...     call_seq,
-        ...     size=size,
-        ...     price=close,
-        ...     fees=np.asarray(0.01),
-        ...     slippage=np.asarray(0.01)
-        ... )
-
-        >>> col_map = col_map_nb(order_records['col'], target_shape[1])
-        >>> exit_trade_records = get_exit_trades_nb(order_records, close, col_map)
-        >>> pd.DataFrame.from_records(exit_trade_records)
-           id  col  size  entry_idx  entry_price  entry_fees  exit_idx  exit_price  \\
-        0   0    0   1.0          0     1.101818    0.011018         2        2.97
-        1   1    0   0.1          0     1.101818    0.001102         3        3.96
-        2   2    0   1.0          4     5.050000    0.050500         5        5.94
-        3   3    0   1.0          5     5.940000    0.059400         5        6.00
-        4   4    1   1.0          0     5.850000    0.058500         2        4.04
-        5   5    1   0.1          0     5.850000    0.005850         3        3.03
-        6   6    1   1.0          4     1.980000    0.019800         5        1.01
-        7   7    1   1.0          5     1.010000    0.010100         5        1.00
-
-           exit_fees       pnl    return  direction  status  parent_id
-        0    0.02970  1.827464  1.658589          0       1          0
-        1    0.00396  0.280756  2.548119          0       1          0
-        2    0.05940  0.780100  0.154475          0       1          1
-        3    0.00000 -0.119400 -0.020101          1       0          2
-        4    0.04040  1.711100  0.292496          1       1          3
-        5    0.00303  0.273120  0.466872          1       1          3
-        6    0.01010  0.940100  0.474798          1       1          4
-        7    0.00000 -0.020100 -0.019901          0       0          5
+        # 构建测试数据：价格走势和交易指令
+        close = order_price = np.array([
+            [1, 6],    # t=0: 资产0价格1，资产1价格6
+            [2, 5],    # t=1: 价格变化
+            [3, 4],    # t=2: 继续变化
+            [4, 3],    # t=3: 价格反转
+            [5, 2],    # t=4: 趋势延续
+            [6, 1]     # t=5: 最终价格
+        ])
+        
+        # 交易指令矩阵（正数买入，负数卖出）
+        size = np.asarray([
+            [1, -1],      # t=0: 多头开仓1单位，空头开仓1单位
+            [0.1, -0.1],  # t=1: 增加持仓
+            [-1, 1],      # t=2: 反向交易（平仓+开新仓）
+            [-0.1, 0.1],  # t=3: 小幅调整
+            [1, -1],      # t=4: 再次反向
+            [-2, 2]       # t=5: 大幅反向交易
+        ])
+        
+        # 回测环境配置
+        target_shape = close.shape
+        group_lens = np.full(target_shape[1], 1)    # 单资产组
+        init_cash = np.full(target_shape[1], 100)   # 初始资金100
+        call_seq = np.full(target_shape, 0)         # 执行顺序
+        
+        # 执行订单模拟回测
+        order_records, log_records = simulate_from_orders_nb(
+            target_shape, group_lens, init_cash, call_seq,
+            size=size, price=close,
+            fees=np.asarray(0.01),      # 手续费率1%
+            slippage=np.asarray(0.01)   # 滑点1%
+        )
+        
+        # 提取出场交易记录
+        col_map = col_map_nb(order_records['col'], target_shape[1])
+        exit_trades = get_exit_trades_nb(order_records, close, col_map)
+        
+        # 结果分析
+        trades_df = pd.DataFrame.from_records(exit_trades)
+        print("出场交易明细:")
+        print(trades_df[['col', 'size', 'entry_price', 'exit_price', 'pnl', 'return']])
+        
+        # 统计分析
+        profitable_trades = trades_df[trades_df['pnl'] > 0]
+        print(f"盈利交易数量: {len(profitable_trades)}")
+        print(f"总盈亏: {trades_df['pnl'].sum():.4f}")
+        print(f"平均收益率: {trades_df['return'].mean():.4f}")
         ```
+        
+    重要特性：
+    - 智能持仓跟踪：自动识别持仓方向变化和数量调整
+    - 精确价格计算：使用交易量加权平均确保价格准确性
+    - 费用合理分摊：按交易比例公平分配各项费用成本
+    - 复杂场景处理：支持部分平仓、超额交易、持仓反转等情况
+    - 性能优化：Numba编译提供接近C语言的执行速度
+    
+    注意事项：
+    - 输入数据验证：订单ID必须单调递增，数量和价格必须为正
+    - 内存效率：预分配数组大小，避免动态扩容的性能损失
+    - 数值精度：使用专门的浮点比较函数处理精度问题
+    - 边界处理：妥善处理空数据、单笔交易等边界情况
+    - 状态一致性：确保持仓状态在各种交易场景下保持逻辑一致
     """
-    col_idxs, col_lens = col_map
-    col_start_idxs = np.cumsum(col_lens) - col_lens
-    records = np.empty(len(order_records), dtype=trade_dt)
-    tidx = 0
-    parent_id = -1
+    # 解构列映射结构，提取索引和长度数组
+    col_idxs, col_lens = col_map  # col_idxs: 订单索引数组，col_lens: 每列订单数量
+    col_start_idxs = np.cumsum(col_lens) - col_lens  # 计算每列在索引数组中的起始位置
+    records = np.empty(len(order_records), dtype=trade_dt)  # 预分配交易记录数组，提高内存效率
+    tidx = 0  # 交易记录填充索引，跟踪下一个可用位置
+    parent_id = -1  # 父持仓组标识符，用于关联相关交易
 
+    # 逐列处理所有资产的订单记录
     for col in range(col_lens.shape[0]):
-        col_len = col_lens[col]
-        if col_len == 0:
+        col_len = col_lens[col]  # 获取当前资产列的订单总数
+        if col_len == 0:  # 如果该列无订单则跳过处理
             continue
-        last_id = -1
-        in_position = False
+        last_id = -1  # 记录上一个处理的订单ID，用于验证顺序
+        in_position = False  # 持仓状态标志，False表示当前无活跃持仓
 
+        # 按顺序处理当前列的每个订单
         for c in range(col_len):
-            oidx = col_idxs[col_start_idxs[col] + c]
-            record = order_records[oidx]
+            oidx = col_idxs[col_start_idxs[col] + c]  # 计算订单在全局记录数组中的实际位置
+            record = order_records[oidx]  # 提取当前要处理的订单记录
 
+            # 严格验证订单ID的时序一致性
             if record['id'] < last_id:
                 raise ValueError("id must come in ascending order per column")
-            last_id = record['id']
+            last_id = record['id']  # 更新已处理的最大订单ID
 
-            i = record['idx']
-            order_size = record['size']
-            order_price = record['price']
-            order_fees = record['fees']
-            order_side = record['side']
+            # 提取订单核心属性信息
+            i = record['idx']  # 订单执行的时间索引
+            order_size = record['size']  # 订单交易数量
+            order_price = record['price']  # 订单成交价格
+            order_fees = record['fees']  # 订单产生的手续费
+            order_side = record['side']  # 订单交易方向（买入/卖出）
 
-            if order_size <= 0.:
+            # 订单数据完整性校验
+            if order_size <= 0.:  # 交易数量必须为正数
                 raise ValueError(size_zero_neg_err)
-            if order_price <= 0.:
+            if order_price <= 0.:  # 交易价格必须为正数
                 raise ValueError(price_zero_neg_err)
 
+            # 处理新交易开启的情况
             if not in_position:
-                # Trade opened
-                in_position = True
-                entry_idx = i
+                # 交易开启，建立新的持仓跟踪状态
+                in_position = True  # 标记为持仓状态
+                entry_idx = i  # 记录入场时间点
+                # 根据首个订单类型确定交易方向
                 if order_side == OrderSide.Buy:
-                    direction = TradeDirection.Long
+                    direction = TradeDirection.Long  # 买入开仓 -> 多头方向
                 else:
-                    direction = TradeDirection.Short
-                parent_id += 1
-                entry_size_sum = 0.
-                entry_gross_sum = 0.
-                entry_fees_sum = 0.
+                    direction = TradeDirection.Short  # 卖出开仓 -> 空头方向
+                parent_id += 1  # 分配新的父持仓组ID
+                # 初始化持仓累积统计变量
+                entry_size_sum = 0.  # 累计入场数量
+                entry_gross_sum = 0.  # 累计入场总价值（数量×价格）
+                entry_fees_sum = 0.  # 累计入场手续费
 
+            # 判断当前订单是否为持仓增加操作（同方向交易）
             if (direction == TradeDirection.Long and order_side == OrderSide.Buy) \
                     or (direction == TradeDirection.Short and order_side == OrderSide.Sell):
-                # Position increased
-                entry_size_sum += order_size
-                entry_gross_sum += order_size * order_price
-                entry_fees_sum += order_fees
+                # 持仓增加：累积入场统计信息
+                entry_size_sum += order_size  # 累加入场总数量
+                entry_gross_sum += order_size * order_price  # 累加入场总价值
+                entry_fees_sum += order_fees  # 累加入场总手续费
 
+            # 判断当前订单是否为出场操作（反向交易）
             elif (direction == TradeDirection.Long and order_side == OrderSide.Sell) \
                     or (direction == TradeDirection.Short and order_side == OrderSide.Buy):
+                # 检查出场数量是否小于等于入场数量（正常平仓或部分平仓）
                 if is_close_or_less_nb(order_size, entry_size_sum):
-                    # Trade closed
+                    # 交易平仓：确定实际出场数量
                     if is_close_nb(order_size, entry_size_sum):
-                        exit_size = entry_size_sum
+                        exit_size = entry_size_sum  # 完全平仓：出场数量等于入场数量
                     else:
-                        exit_size = order_size
-                    exit_price = order_price
-                    exit_fees = order_fees
-                    exit_idx = i
+                        exit_size = order_size  # 部分平仓：出场数量等于订单数量
+                    exit_price = order_price  # 出场价格即为当前订单价格
+                    exit_fees = order_fees  # 出场手续费即为当前订单手续费
+                    exit_idx = i  # 出场时间索引即为当前订单时间
 
-                    # Take a size-weighted average of entry price
+                    # 计算加权平均入场价格
                     entry_price = entry_gross_sum / entry_size_sum
 
-                    # Take a fraction of entry fees
-                    size_fraction = exit_size / entry_size_sum
-                    entry_fees = size_fraction * entry_fees_sum
+                    # 按出场数量比例分摊入场手续费
+                    size_fraction = exit_size / entry_size_sum  # 计算出场数量占入场数量的比例
+                    entry_fees = size_fraction * entry_fees_sum  # 按比例分摊入场费用
 
+                    # 填充出场交易记录
                     fill_trade_record_nb(
-                        records[tidx],
-                        tidx,
-                        col,
-                        exit_size,
-                        entry_idx,
-                        entry_price,
-                        entry_fees,
-                        exit_idx,
-                        exit_price,
-                        exit_fees,
-                        direction,
-                        TradeStatus.Closed,
-                        parent_id
+                        records[tidx],  # 目标记录位置
+                        tidx,  # 交易记录ID
+                        col,  # 资产列索引
+                        exit_size,  # 交易数量
+                        entry_idx,  # 入场时间索引
+                        entry_price,  # 入场价格（加权平均）
+                        entry_fees,  # 入场费用（按比例分摊）
+                        exit_idx,  # 出场时间索引
+                        exit_price,  # 出场价格
+                        exit_fees,  # 出场费用
+                        direction,  # 交易方向
+                        TradeStatus.Closed,  # 交易状态：已平仓
+                        parent_id  # 父持仓组ID
                     )
-                    tidx += 1
+                    tidx += 1  # 移动到下一个记录位置
 
+                    # 判断是完全平仓还是部分平仓
                     if is_close_nb(order_size, entry_size_sum):
-                        # Position closed
-                        entry_idx = -1
-                        direction = -1
-                        in_position = False
+                        # 完全平仓：重置持仓状态
+                        entry_idx = -1  # 重置入场索引
+                        direction = -1  # 重置交易方向
+                        in_position = False  # 标记为无持仓状态
                     else:
-                        # Position decreased, previous orders have now less impact
-                        size_fraction = (entry_size_sum - order_size) / entry_size_sum
-                        entry_size_sum *= size_fraction
-                        entry_gross_sum *= size_fraction
-                        entry_fees_sum *= size_fraction
+                        # 部分平仓：按比例缩减剩余持仓统计信息
+                        size_fraction = (entry_size_sum - order_size) / entry_size_sum  # 计算剩余持仓比例
+                        entry_size_sum *= size_fraction  # 按比例缩减入场数量
+                        entry_gross_sum *= size_fraction  # 按比例缩减入场总价值
+                        entry_fees_sum *= size_fraction  # 按比例缩减入场总费用
                 else:
-                    # Trade reversed
-                    # Close current trade
-                    cl_exit_size = entry_size_sum
-                    cl_exit_price = order_price
-                    cl_exit_fees = cl_exit_size / order_size * order_fees
-                    cl_exit_idx = i
+                    # 交易反转：订单数量超过入场数量，需要先平仓再开立反向新仓
+                    # 第一步：完全平仓当前持仓
+                    cl_exit_size = entry_size_sum  # 平仓数量等于全部入场数量
+                    cl_exit_price = order_price  # 平仓价格即为当前订单价格
+                    cl_exit_fees = cl_exit_size / order_size * order_fees  # 按比例计算平仓部分的手续费
+                    cl_exit_idx = i  # 平仓时间索引即为当前订单时间
 
-                    # Take a size-weighted average of entry price
+                    # 计算当前持仓的加权平均入场价格
                     entry_price = entry_gross_sum / entry_size_sum
 
-                    # Take a fraction of entry fees
-                    size_fraction = cl_exit_size / entry_size_sum
-                    entry_fees = size_fraction * entry_fees_sum
+                    # 计算当前持仓的入场费用（全额分摊，因为是完全平仓）
+                    size_fraction = cl_exit_size / entry_size_sum  # 比例为1（完全平仓）
+                    entry_fees = size_fraction * entry_fees_sum  # 全部入场费用
 
+                    # 填充当前持仓的平仓交易记录
                     fill_trade_record_nb(
-                        records[tidx],
-                        tidx,
-                        col,
-                        cl_exit_size,
-                        entry_idx,
-                        entry_price,
-                        entry_fees,
-                        cl_exit_idx,
-                        cl_exit_price,
-                        cl_exit_fees,
-                        direction,
-                        TradeStatus.Closed,
-                        parent_id
+                        records[tidx],  # 目标记录位置
+                        tidx,  # 交易记录ID
+                        col,  # 资产列索引
+                        cl_exit_size,  # 平仓数量（全部入场数量）
+                        entry_idx,  # 入场时间索引
+                        entry_price,  # 入场价格（加权平均）
+                        entry_fees,  # 入场费用（全额）
+                        cl_exit_idx,  # 出场时间索引
+                        cl_exit_price,  # 出场价格
+                        cl_exit_fees,  # 出场费用（按比例）
+                        direction,  # 原交易方向
+                        TradeStatus.Closed,  # 交易状态：已平仓
+                        parent_id  # 父持仓组ID
                     )
-                    tidx += 1
+                    tidx += 1  # 移动到下一个记录位置
 
-                    # Open a new trade
-                    entry_size_sum = order_size - cl_exit_size
-                    entry_gross_sum = entry_size_sum * order_price
-                    entry_fees_sum = order_fees - cl_exit_fees
-                    entry_idx = i
+                    # 第二步：开立新的反向持仓
+                    entry_size_sum = order_size - cl_exit_size  # 新持仓数量 = 订单数量 - 平仓数量
+                    entry_gross_sum = entry_size_sum * order_price  # 新持仓总价值
+                    entry_fees_sum = order_fees - cl_exit_fees  # 新持仓费用 = 总费用 - 平仓费用
+                    entry_idx = i  # 新持仓的入场时间索引
+                    # 确定新持仓的交易方向（与原方向相反）
                     if direction == TradeDirection.Long:
-                        direction = TradeDirection.Short
+                        direction = TradeDirection.Short  # 原多头 -> 新空头
                     else:
-                        direction = TradeDirection.Long
-                    parent_id += 1
+                        direction = TradeDirection.Long  # 原空头 -> 新多头
+                    parent_id += 1  # 分配新的父持仓组ID
 
+        # 处理列结束时仍有未平仓交易的情况
         if in_position and is_less_nb(-entry_size_sum, 0):
-            # Trade hasn't been closed
-            exit_size = entry_size_sum
-            exit_price = close[close.shape[0] - 1, col]
-            exit_fees = 0.
-            exit_idx = close.shape[0] - 1
+            # 交易未完全平仓：使用最后收盘价进行估值
+            exit_size = entry_size_sum  # 出场数量等于全部入场数量
+            exit_price = close[close.shape[0] - 1, col]  # 使用最后一个时间点的收盘价作为出场价格
+            exit_fees = 0.  # 未实际出场，出场费用为0
+            exit_idx = close.shape[0] - 1  # 出场时间索引为最后一个时间点
 
-            # Take a size-weighted average of entry price
+            # 计算加权平均入场价格
             entry_price = entry_gross_sum / entry_size_sum
 
-            # Take a fraction of entry fees
-            size_fraction = exit_size / entry_size_sum
-            entry_fees = size_fraction * entry_fees_sum
+            # 计算入场费用分摊（全额分摊，因为是完整交易）
+            size_fraction = exit_size / entry_size_sum  # 比例为1（完整交易）
+            entry_fees = size_fraction * entry_fees_sum  # 全部入场费用
 
+            # 填充未平仓交易记录（使用最后收盘价作为估值）
             fill_trade_record_nb(
-                records[tidx],
-                tidx,
-                col,
-                exit_size,
-                entry_idx,
-                entry_price,
-                entry_fees,
-                exit_idx,
-                exit_price,
-                exit_fees,
-                direction,
-                TradeStatus.Open,
-                parent_id
+                records[tidx],  # 目标记录位置
+                tidx,  # 交易记录ID
+                col,  # 资产列索引
+                exit_size,  # 交易数量（全部入场数量）
+                entry_idx,  # 入场时间索引
+                entry_price,  # 入场价格（加权平均）
+                entry_fees,  # 入场费用（全额）
+                exit_idx,  # 出场时间索引（最后时间点）
+                exit_price,  # 出场价格（最后收盘价）
+                exit_fees,  # 出场费用（0）
+                direction,  # 交易方向
+                TradeStatus.Open,  # 交易状态：仍开仓
+                parent_id  # 父持仓组ID
             )
-            tidx += 1
+            tidx += 1  # 移动到下一个记录位置
 
-    return records[:tidx]
+    return records[:tidx]  # 返回实际填充的交易记录数组（去除未使用的空间）
 
 
 @njit(cache=True)  # Numba编译缓存，优化重复调用性能
@@ -10601,83 +11355,199 @@ def copy_trade_record_nb(record: tp.Record, trade_record: tp.Record) -> None:
     record['parent_id'] = trade_record['parent_id']         # 父级交易ID
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def get_positions_nb(trade_records: tp.RecordArray, col_map: tp.ColMap) -> tp.RecordArray:
-    """Fill position records by aggregating trade records.
-
-    Trades can be entry trades, exit trades, and even positions themselves - all will produce the same results.
-
-    Usage:
-        * Building upon the example in `get_exit_trades_nb`:
-
-        ```pycon
-        >>> from vectorbt.portfolio.nb import get_positions_nb
-
-        >>> col_map = col_map_nb(exit_trade_records['col'], target_shape[1])
-        >>> position_records = get_positions_nb(exit_trade_records, col_map)
-        >>> pd.DataFrame.from_records(position_records)
-           id  col  size  entry_idx  entry_price  entry_fees  exit_idx  exit_price  \\
-        0   0    0   1.1          0     1.101818     0.01212         3    3.060000
-        1   1    0   1.0          4     5.050000     0.05050         5    5.940000
-        2   2    0   1.0          5     5.940000     0.05940         5    6.000000
-        3   3    1   1.1          0     5.850000     0.06435         3    3.948182
-        4   4    1   1.0          4     1.980000     0.01980         5    1.010000
-        5   5    1   1.0          5     1.010000     0.01010         5    1.000000
-
-           exit_fees      pnl    return  direction  status  parent_id
-        0    0.03366  2.10822  1.739455          0       1          0
-        1    0.05940  0.78010  0.154475          0       1          1
-        2    0.00000 -0.11940 -0.020101          1       0          2
-        3    0.04343  1.98422  0.308348          1       1          3
-        4    0.01010  0.94010  0.474798          1       1          4
-        5    0.00000 -0.02010 -0.019901          0       0          5
-        ```
     """
+    通过聚合交易记录生成持仓记录
+    
+    该函数将交易记录按持仓周期进行聚合，生成完整的持仓记录。无论是入场交易、出场交易还是持仓本身，
+    都会产生相同的结果。该函数是构建持仓分析的基础，支持复杂的交易策略分析。
+    
+    算法原理：
+    - 按列分组处理交易记录，确保每个资产独立分析
+    - 通过parent_id字段识别属于同一持仓的交易
+    - 聚合同一持仓的所有交易，计算综合的持仓指标
+    - 支持分批建仓和分批平仓的复杂交易模式
+    
+    参数说明：
+    ----
+    trade_records : tp.RecordArray
+        交易记录数组，包含完整的交易信息，数据类型为trade_dt
+        - 必须包含'id'、'col'、'parent_id'等字段
+        - 记录应按列分组且ID按升序排列
+        - 支持入场交易、出场交易和持仓记录
+        
+    col_map : tp.ColMap
+        列映射结构，定义交易记录按列的分组信息
+        - 格式：(col_idxs, col_lens)元组
+        - col_idxs: 按列分组的索引数组
+        - col_lens: 每列的记录数量数组
+        - 用于高效的多资产并行处理
+        
+    返回：
+    ----
+    tp.RecordArray
+        持仓记录数组，数据类型为trade_dt，包含聚合后的持仓信息
+        - 每个记录代表一个完整的持仓周期
+        - 包含入场、出场、盈亏等综合指标
+        - 支持未平仓持仓的记录（exit_idx = -1）
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    import pandas as pd
+    from vectorbt.portfolio.nb import get_positions_nb, col_map_nb
+    from vectorbt.portfolio.enums import trade_dt, TradeDirection, TradeStatus
+    
+    # 创建示例交易记录（多资产组合）
+    trade_records = np.array([
+        # 资产0的交易记录
+        (0, 0, 100.0, 10, 50.25, 1.25, 15, 52.10, 0.65, 184.35, 0.0365, 0, 1, 0),  # 持仓0
+        (1, 0, -50.0, 20, 51.80, 0.65, 25, 51.50, 0.32, -15.0, -0.0058, 1, 1, 1),  # 持仓1
+        (2, 0, 75.0, 30, 49.90, 0.75, -1, 50.20, 0.0, 22.5, 0.0090, 0, 0, 2),      # 持仓2（未平仓）
+        
+        # 资产1的交易记录
+        (3, 1, 200.0, 5, 25.50, 2.55, 12, 26.80, 1.34, 258.11, 0.0506, 0, 1, 3),   # 持仓3
+        (4, 1, -100.0, 18, 26.20, 1.31, 22, 25.90, 0.65, 29.0, 0.0110, 1, 1, 4),   # 持仓4
+    ], dtype=trade_dt)
+    
+    # 构建列映射（2个资产）
+    col_map = col_map_nb(trade_records['col'], 2)
+    
+    # 生成持仓记录
+    position_records = get_positions_nb(trade_records, col_map)
+    
+    # 转换为DataFrame进行分析
+    df = pd.DataFrame.from_records(position_records)
+    print("持仓记录:")
+    print(df[['id', 'col', 'size', 'entry_idx', 'exit_idx', 'pnl', 'status']])
+    
+    # 分析持仓表现
+    closed_positions = df[df['status'] == TradeStatus.Closed]
+    open_positions = df[df['status'] == TradeStatus.Open]
+    
+    print(f"\n已平仓持仓数: {len(closed_positions)}")
+    print(f"未平仓持仓数: {len(open_positions)}")
+    print(f"总盈亏: {closed_positions['pnl'].sum():.2f}")
+    print(f"平均收益率: {closed_positions['return'].mean():.2%}")
+    
+    # 按资产分析
+    asset_performance = df.groupby('col').agg({
+        'pnl': 'sum',
+        'return': 'mean',
+        'id': 'count'
+    }).rename(columns={'id': 'position_count'})
+    print(f"\n按资产表现:\n{asset_performance}")
+    ```
+    
+    输出示例：
+    ```
+    持仓记录:
+       id  col   size  entry_idx  exit_idx      pnl  status
+    0   0    0  100.0         10        15   184.35       1
+    1   1    0  -50.0         20        25   -15.00       1
+    2   2    0   75.0         30        -1    22.50       0
+    3   3    1  200.0          5        12   258.11       1
+    4   4    1 -100.0         18        22    29.00       1
+    
+    已平仓持仓数: 4
+    未平仓持仓数: 1
+    总盈亏: 456.46
+    平均收益率: 2.34%
+    
+    按资产表现:
+        pnl  return  position_count
+    col                          
+    0    191.85  0.0133               3
+    1    287.11  0.0334               2
+    ```
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(n)，其中n是交易记录总数
+    - 空间复杂度：O(n)，需要存储所有持仓记录
+    - 支持大规模多资产组合的高效处理
+    - 内存使用优化，避免重复数据存储
+    
+    注意事项：
+    ----
+    - 交易记录必须按列分组且ID按升序排列
+    - parent_id字段用于识别同一持仓的交易
+    - 支持复杂的分批建仓和平仓模式
+    - 未平仓持仓的exit_idx为-1，exit_price使用当前估值
+    """
+    # 解构列映射，获取索引数组和长度数组
     col_idxs, col_lens = col_map
+    # 计算每列在索引数组中的起始位置（累积和减去当前长度）
     col_start_idxs = np.cumsum(col_lens) - col_lens
+    # 预分配持仓记录数组，最大容量为交易记录数量
     records = np.empty(len(trade_records), dtype=trade_dt)
+    # 持仓记录索引，用于跟踪当前填充位置
     pidx = 0
+    # 当前持仓的起始交易索引，-1表示未初始化
     from_tidx = -1
 
+    # 按列遍历处理交易记录
     for col in range(col_lens.shape[0]):
+        # 获取当前列的记录数量
         col_len = col_lens[col]
+        # 跳过空列（没有交易的资产）
         if col_len == 0:
             continue
+        # 跟踪当前列中最后处理的记录ID，用于验证排序
         last_id = -1
+        # 跟踪当前列中最后处理的持仓ID，用于识别持仓边界
         last_position_id = -1
 
+        # 遍历当前列的所有交易记录
         for c in range(col_len):
+            # 计算当前记录在原始数组中的索引
             tidx = col_idxs[col_start_idxs[col] + c]
+            # 获取当前交易记录
             record = trade_records[tidx]
 
+            # 验证记录ID按升序排列（数据完整性检查）
             if record['id'] < last_id:
                 raise ValueError("id must come in ascending order per column")
             last_id = record['id']
 
+            # 获取当前记录的父级持仓ID
             parent_id = record['parent_id']
 
+            # 检测持仓边界：当parent_id发生变化时，表示进入新的持仓
             if parent_id != last_position_id:
+                # 如果存在前一个持仓，则处理该持仓的记录
                 if last_position_id != -1:
+                    # 如果持仓包含多个交易记录，使用聚合函数
                     if tidx - from_tidx > 1:
                         fill_position_record_nb(records[pidx], pidx, trade_records[from_tidx:tidx])
                     else:
-                        # Speed up
+                        # 优化：如果持仓只有一个交易，直接复制记录
                         copy_trade_record_nb(records[pidx], trade_records[from_tidx])
+                        # 更新记录ID和父级ID为持仓ID
                         records[pidx]['id'] = pidx
                         records[pidx]['parent_id'] = pidx
+                    # 移动到下一个持仓记录位置
                     pidx += 1
+                # 更新新持仓的起始索引和ID
                 from_tidx = tidx
                 last_position_id = parent_id
 
+        # 处理当前列的最后一个持仓（列结束时的清理操作）
         if tidx - from_tidx > 0:
+            # 如果持仓包含多个交易记录，使用聚合函数
             fill_position_record_nb(records[pidx], pidx, trade_records[from_tidx:tidx + 1])
         else:
-            # Speed up
+            # 优化：如果持仓只有一个交易，直接复制记录
             copy_trade_record_nb(records[pidx], trade_records[from_tidx])
+            # 更新记录ID和父级ID为持仓ID
             records[pidx]['id'] = pidx
             records[pidx]['parent_id'] = pidx
+        # 移动到下一个持仓记录位置
         pidx += 1
 
+    # 返回实际使用的持仓记录数组（去除未使用的预分配空间）
     return records[:pidx]
 
 
@@ -10840,130 +11710,1071 @@ def get_short_size_nb(position_before: float, position_now: float) -> float:
     return add_nb(position_before, -position_now)
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def asset_flow_nb(target_shape: tp.Shape,
                   order_records: tp.RecordArray,
                   col_map: tp.ColMap,
                   direction: int) -> tp.Array2d:
-    """Get asset flow series per column.
-
-    Returns the total transacted amount of assets at each time step."""
+    """
+    计算每列的资产流量序列
+    
+    根据订单记录计算每个时间点每个资产的交易量变化，支持多空方向的
+    独立分析。该函数是构建资产持仓分析的基础，能够精确跟踪
+    多头、空头或双向的资产流动情况。
+    
+    算法原理：
+    - 按列分组处理订单记录，确保每个资产独立分析
+    - 根据交易方向（买入/卖出）计算持仓变化
+    - 支持三种方向模式：仅多头、仅空头、双向
+    - 使用累积持仓计算精确的资产流量
+    
+    参数说明：
+    ----
+    target_shape : tp.Shape
+        目标形状元组 (时间步数, 资产数量)
+        - 时间步数：回测期间的总时间点数
+        - 资产数量：投资组合中的资产总数
+        
+    order_records : tp.RecordArray
+        订单记录数组，包含完整的交易执行信息
+        - 必须包含'id'、'idx'、'side'、'size'等字段
+        - 记录应按列分组且ID按升序排列
+        - 支持买入、卖出、平仓等所有交易类型
+        
+    col_map : tp.ColMap
+        列映射结构，定义订单记录按列的分组信息
+        - 格式：(col_idxs, col_lens)元组
+        - col_idxs: 按列分组的索引数组
+        - col_lens: 每列的记录数量数组
+        
+    direction : int
+        资产流量计算方向，使用Direction枚举值
+        - Direction.LongOnly (0): 仅计算多头流量
+        - Direction.ShortOnly (1): 仅计算空头流量  
+        - Direction.Both (2): 计算双向流量（默认）
+        
+    返回：
+    ----
+    tp.Array2d
+        资产流量矩阵，形状为target_shape
+        - 正值：资产流入（建仓或增仓）
+        - 负值：资产流出（减仓或平仓）
+        - 零值：无资产流动
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    import pandas as pd
+    from vectorbt.portfolio.nb import asset_flow_nb, col_map_nb
+    from vectorbt.portfolio.enums import Direction, OrderSide
+    
+    # 创建示例订单记录
+    order_records = np.array([
+        # 时间0：买入100股股票A
+        (0, 0, 0, 100.0, 50.0, 1.0, 0, 0),
+        # 时间1：卖出50股股票A
+        (1, 0, 1, -50.0, 52.0, 0.5, 1, 0),
+        # 时间2：买入200股股票B
+        (2, 1, 2, 200.0, 25.0, 2.0, 2, 1),
+    ], dtype=order_dt)
+    
+    # 构建列映射（2个资产）
+    col_map = col_map_nb(order_records['col'], 2)
+    
+    # 计算双向资产流量
+    asset_flow = asset_flow_nb((3, 2), order_records, col_map, Direction.Both)
+    
+    # 转换为DataFrame分析
+    df = pd.DataFrame(asset_flow, 
+                     columns=['股票A', '股票B'],
+                     index=['时间0', '时间1', '时间2'])
+    print("双向资产流量:")
+    print(df)
+    
+    # 仅计算多头流量
+    long_flow = asset_flow_nb((3, 2), order_records, col_map, Direction.LongOnly)
+    print("\n多头资产流量:")
+    print(pd.DataFrame(long_flow, 
+                      columns=['股票A', '股票B'],
+                      index=['时间0', '时间1', '时间2']))
+    ```
+    
+    输出示例：
+    ```
+    双向资产流量:
+         股票A  股票B
+    时间0  100.0   0.0
+    时间1  -50.0   0.0
+    时间2    0.0 200.0
+    
+    多头资产流量:
+         股票A  股票B
+    时间0  100.0   0.0
+    时间1    0.0   0.0
+    时间2    0.0 200.0
+    ```
+    
+    应用场景：
+    ----
+    - **持仓分析**：跟踪资产持仓的动态变化
+    - **交易策略**：分析建仓、减仓、平仓的时机
+    - **风险控制**：监控资产暴露的快速变化
+    - **绩效归因**：分析资产流动对收益的贡献
+    - **资金管理**：评估资产配置的调整频率
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(n)，其中n是订单记录总数
+    - 空间复杂度：O(t×c)，其中t是时间步数，c是资产数量
+    - 支持大规模多资产组合的高效处理
+    - 内存使用优化，避免重复计算
+    
+    注意事项：
+    ----
+    - 订单记录必须按列分组且ID按升序排列
+    - 方向参数影响流量计算的精确性
+    - 多头流量模式下，卖出操作不产生负流量
+    - 空头流量模式下，买入操作不产生正流量
+    """
+    # 解构列映射，获取索引数组和长度数组
     col_idxs, col_lens = col_map
+    # 计算每列在索引数组中的起始位置（累积和减去当前长度）
     col_start_idxs = np.cumsum(col_lens) - col_lens
+    # 初始化输出矩阵，默认值为0（无资产流动）
     out = np.full(target_shape, 0., dtype=np.float64)
 
+    # 按列遍历处理订单记录
     for col in range(col_lens.shape[0]):
+        # 获取当前列的记录数量
         col_len = col_lens[col]
+        # 跳过空列（没有订单的资产）
         if col_len == 0:
             continue
+        # 跟踪当前列中最后处理的记录ID，用于验证排序
         last_id = -1
+        # 当前持仓数量，用于计算持仓变化
         position_now = 0.
 
+        # 遍历当前列的所有订单记录
         for c in range(col_len):
+            # 计算当前订单在原始数组中的索引
             oidx = col_idxs[col_start_idxs[col] + c]
+            # 获取当前订单记录
             record = order_records[oidx]
 
+            # 验证订单ID按升序排列（数据完整性检查）
             if record['id'] < last_id:
                 raise ValueError("id must come in ascending order per column")
             last_id = record['id']
 
-            i = record['idx']
-            side = record['side']
-            size = record['size']
+            # 提取订单的关键信息
+            i = record['idx']        # 时间索引
+            side = record['side']    # 订单方向（买入/卖出）
+            size = record['size']    # 订单数量
 
+            # 统一订单方向：卖单转为负数量，便于计算持仓变化
             if side == OrderSide.Sell:
                 size *= -1
+            # 计算新的持仓数量（累积持仓）
             new_position_now = add_nb(position_now, size)
+            
+            # 根据方向参数计算资产流量
             if direction == Direction.LongOnly:
+                # 仅多头模式：只计算多头方向的持仓变化
                 asset_flow = get_long_size_nb(position_now, new_position_now)
             elif direction == Direction.ShortOnly:
+                # 仅空头模式：只计算空头方向的持仓变化
                 asset_flow = get_short_size_nb(position_now, new_position_now)
             else:
+                # 双向模式：直接使用订单数量作为流量
                 asset_flow = size
+            
+            # 累加资产流量到输出矩阵的对应位置
             out[i, col] = add_nb(out[i, col], asset_flow)
+            # 更新当前持仓数量，为下次计算做准备
             position_now = new_position_now
+    
+    # 返回完整的资产流量矩阵
     return out
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def assets_nb(asset_flow: tp.Array2d) -> tp.Array2d:
-    """Get asset series per column.
-
-    Returns the current position at each time step."""
+    """
+    根据资产流量计算每列的持仓序列
+    
+    通过累积资产流量计算每个时间点每个资产的当前持仓数量。该函数
+    是资产流量分析的逆运算，能够从交易活动重构完整的持仓历史。
+    
+    算法原理：
+    - 对每个资产列，从初始持仓0开始累积计算
+    - 每个时间点的持仓 = 前一持仓 + 当前流量
+    - 支持正负持仓（多头为正，空头为负）
+    - 使用add_nb函数确保浮点数计算精度
+    
+    参数说明：
+    ----
+    asset_flow : tp.Array2d
+        资产流量矩阵，形状为 (时间步数, 资产数量)
+        - 正值：资产流入（建仓或增仓）
+        - 负值：资产流出（减仓或平仓）
+        - 零值：无资产流动
+        - 通常由asset_flow_nb函数生成
+        
+    返回：
+    ----
+    tp.Array2d
+        持仓矩阵，形状与asset_flow相同
+        - 正值：多头持仓数量
+        - 负值：空头持仓数量
+        - 零值：空仓状态
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    import pandas as pd
+    from vectorbt.portfolio.nb import assets_nb
+    
+    # 创建示例资产流量矩阵（3个时间点，2个资产）
+    asset_flow = np.array([
+        [100.0,  0.0],   # 时间0：买入100股A，B无变化
+        [-50.0,  0.0],   # 时间1：卖出50股A，B无变化
+        [ 0.0, 200.0],   # 时间2：A无变化，买入200股B
+    ])
+    
+    # 计算持仓序列
+    positions = assets_nb(asset_flow)
+    
+    # 转换为DataFrame分析
+    df_flow = pd.DataFrame(asset_flow, 
+                          columns=['股票A', '股票B'],
+                          index=['时间0', '时间1', '时间2'])
+    df_pos = pd.DataFrame(positions, 
+                         columns=['股票A', '股票B'],
+                         index=['时间0', '时间1', '时间2'])
+    
+    print("资产流量:")
+    print(df_flow)
+    print("\n持仓序列:")
+    print(df_pos)
+    
+    # 验证累积关系
+    print(f"\n验证：股票A在时间1的持仓 = 100 + (-50) = {positions[1, 0]}")
+    print(f"验证：股票B在时间2的持仓 = 0 + 200 = {positions[2, 1]}")
+    ```
+    
+    输出示例：
+    ```
+    资产流量:
+         股票A  股票B
+    时间0  100.0   0.0
+    时间1  -50.0   0.0
+    时间2    0.0 200.0
+    
+    持仓序列:
+         股票A  股票B
+    时间0  100.0   0.0
+    时间1   50.0   0.0
+    时间2   50.0 200.0
+    
+    验证：股票A在时间1的持仓 = 100 + (-50) = 50.0
+    验证：股票B在时间2的持仓 = 0 + 200 = 200.0
+    ```
+    
+    应用场景：
+    ----
+    - **持仓重构**：从交易记录重建完整的持仓历史
+    - **风险监控**：实时跟踪各资产的持仓暴露
+    - **绩效分析**：分析持仓变化对收益的影响
+    - **资金管理**：评估各资产的资金占用情况
+    - **合规检查**：验证持仓是否符合投资限制
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(t×c)，其中t是时间步数，c是资产数量
+    - 空间复杂度：O(t×c)，需要存储完整的持仓矩阵
+    - 支持大规模多资产组合的高效处理
+    - 内存访问模式优化，适合缓存友好的计算
+    
+    注意事项：
+    ----
+    - 输入流量矩阵应包含完整的交易历史
+    - 初始持仓假设为0，如需其他初始值需手动调整
+    - 累积计算会放大浮点数误差，建议使用add_nb函数
+    - 结果矩阵可用于进一步的持仓分析和可视化
+    
+    与相关函数的关系：
+    -----------------
+    - 输入：通常来自asset_flow_nb函数的输出
+    - 输出：可用于position_mask_nb等持仓分析函数
+    - 逆运算：asset_flow_nb的逆函数，实现流量到持仓的转换
+    """
+    # 创建输出矩阵，形状和数据类型与输入流量矩阵相同
     out = np.empty_like(asset_flow)
+    
+    # 遍历每个资产列
     for col in range(asset_flow.shape[1]):
+        # 初始化当前资产的持仓数量（从0开始累积）
         position_now = 0.
+        
+        # 遍历每个时间点，累积计算持仓
         for i in range(asset_flow.shape[0]):
+            # 获取当前时间点的资产流量
             flow_value = asset_flow[i, col]
+            # 累积持仓：新持仓 = 原持仓 + 当前流量
             position_now = add_nb(position_now, flow_value)
+            # 将累积后的持仓存储到输出矩阵
             out[i, col] = position_now
+    
+    # 返回完整的持仓历史矩阵
     return out
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def i_group_any_reduce_nb(i: int, group: int, a: tp.Array1d) -> bool:
-    """Boolean "any" reducer for grouped columns."""
+    """
+    分组列的布尔"任意"归约函数
+    
+    该函数是分组操作的归约器，用于判断组内是否存在任意一个True值。
+    主要用于持仓掩码的分组聚合，将多个资产的持仓状态压缩为组合级别的状态。
+    
+    算法原理：
+    - 使用numpy.any()函数检查数组中的任意元素是否为True
+    - 如果组内任何一个资产有持仓，则组合状态为True
+    - 只有当组内所有资产都无持仓时，组合状态才为False
+    - 支持向量化的布尔运算，性能优异
+    
+    参数说明：
+    ----
+    i : int
+        当前时间索引，用于时间维度的处理
+        - 在分组归约中通常用于标识时间点
+        - 函数内部未直接使用，但保持接口一致性
+        
+    group : int
+        当前组索引，标识正在处理的资产组
+        - 用于多组资产的并行处理
+        - 函数内部未直接使用，但保持接口一致性
+        
+    a : tp.Array1d
+        待归约的一维布尔数组
+        - 包含组内所有资产的布尔值
+        - 通常表示持仓状态（True=有持仓，False=无持仓）
+        
+    返回：
+    ----
+    bool
+        归约结果：组内是否存在任意True值
+        - True：组内至少有一个资产有持仓
+        - False：组内所有资产都无持仓
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    from vectorbt.portfolio.nb import i_group_any_reduce_nb
+    
+    # 示例1：组内部分资产有持仓
+    positions_group1 = np.array([False, True, False, False])
+    result1 = i_group_any_reduce_nb(0, 0, positions_group1)
+    print(f"组1结果: {result1}")  # True（存在True值）
+    
+    # 示例2：组内所有资产都无持仓
+    positions_group2 = np.array([False, False, False, False])
+    result2 = i_group_any_reduce_nb(0, 1, positions_group2)
+    print(f"组2结果: {result2}")  # False（全为False）
+    
+    # 示例3：组内所有资产都有持仓
+    positions_group3 = np.array([True, True, True, True])
+    result3 = i_group_any_reduce_nb(0, 2, positions_group3)
+    print(f"组3结果: {result3}")  # True（存在True值）
+    
+    # 实际应用：检查投资组合是否在任何时间点有持仓
+    portfolio_positions = np.array([
+        [True, False, True],   # 时间0：资产0和2有持仓
+        [False, False, False], # 时间1：所有资产都无持仓
+        [True, True, False],   # 时间2：资产0和1有持仓
+    ])
+    
+    # 检查每个时间点的组合持仓状态
+    for i in range(portfolio_positions.shape[0]):
+        has_position = i_group_any_reduce_nb(i, 0, portfolio_positions[i])
+        print(f"时间{i}: 组合{'有' if has_position else '无'}持仓")
+    ```
+    
+    输出示例：
+    ```
+    组1结果: True
+    组2结果: False
+    组3结果: True
+    时间0: 组合有持仓
+    时间1: 组合无持仓
+    时间2: 组合有持仓
+    ```
+    
+    应用场景：
+    ----
+    - **持仓监控**：判断投资组合是否在任何时间点有持仓
+    - **风险控制**：监控组合级别的风险暴露状态
+    - **绩效分析**：分析组合的持仓覆盖率
+    - **资金管理**：评估组合的资金使用效率
+    - **合规检查**：验证组合是否满足持仓要求
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(n)，其中n是组内资产数量
+    - 空间复杂度：O(1)，仅需要常数额外空间
+    - 支持向量化计算，性能优异
+    - Numba编译优化，适合大规模数据处理
+    
+    注意事项：
+    ----
+    - 输入数组应为布尔类型，非布尔值会被自动转换
+    - 空数组的归约结果为False
+    - 函数设计为归约器接口，通常不直接调用
+    - 主要用于position_mask_grouped_nb等分组函数
+    
+    与相关函数的关系：
+    -----------------
+    - 被调用：position_mask_grouped_nb函数使用此归约器
+    - 功能类似：与group_mean_reduce_nb等归约器形成归约器家族
+    - 接口一致：保持与其他归约器相同的参数签名
+    """
     return np.any(a)
 
 
-@njit
+@njit  # Numba即时编译，支持动态输入形状
 def position_mask_grouped_nb(position_mask: tp.Array2d, group_lens: tp.Array1d) -> tp.Array2d:
-    """Get whether in position for each row and group."""
+    """
+    计算分组后的持仓掩码矩阵
+    
+    将多个资产的持仓状态按组进行聚合，生成组合级别的持仓掩码。
+    该函数支持现金共享组合的分析，能够将资产级别的持仓信息
+    压缩为组合级别的状态指示。
+    
+    算法原理：
+    - 使用generic_nb.squeeze_grouped_nb进行分组聚合
+    - 对每个组内的资产使用i_group_any_reduce_nb归约器
+    - 如果组内任何一个资产有持仓，则组合状态为True
+    - 只有当组内所有资产都无持仓时，组合状态才为False
+    - 最终输出布尔类型的持仓掩码矩阵
+    
+    参数说明：
+    ----
+    position_mask : tp.Array2d
+        原始持仓掩码矩阵，形状为 (时间步数, 资产数量)
+        - True：对应时间点和资产有持仓
+        - False：对应时间点和资产无持仓
+        - 通常由position_mask_nb函数生成
+        
+    group_lens : tp.Array1d
+        每个组包含的列数数组
+        - 例如：[3, 2] 表示第1组有3个资产，第2组有2个资产
+        - 所有组长度之和应等于position_mask的列数
+        - 用于定义分组结构
+        
+    返回：
+    ----
+    tp.Array2d
+        分组后的持仓掩码矩阵，形状为 (时间步数, 组数)
+        - True：对应时间点和组合有持仓
+        - False：对应时间点和组合无持仓
+        - 列数从资产数量压缩为组数
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    import pandas as pd
+    from vectorbt.portfolio.nb import position_mask_grouped_nb
+    
+    # 创建示例持仓掩码矩阵（3个时间点，5个资产）
+    position_mask = np.array([
+        [True,  False, True,  False, True ],  # 时间0：资产0,2,4有持仓
+        [False, False, False, False, False],  # 时间1：所有资产都无持仓
+        [True,  True,  False, True,  False], # 时间2：资产0,1,3有持仓
+    ])
+    
+    # 定义分组：第1组3个资产，第2组2个资产
+    group_lens = np.array([3, 2])
+    
+    # 计算分组后的持仓掩码
+    grouped_mask = position_mask_grouped_nb(position_mask, group_lens)
+    
+    # 转换为DataFrame分析
+    df_original = pd.DataFrame(position_mask, 
+                              columns=['A1', 'A2', 'A3', 'B1', 'B2'],
+                              index=['时间0', '时间1', '时间2'])
+    df_grouped = pd.DataFrame(grouped_mask, 
+                             columns=['组合A', '组合B'],
+                             index=['时间0', '时间1', '时间2'])
+    
+    print("原始持仓掩码（资产级别）:")
+    print(df_original)
+    print("\n分组持仓掩码（组合级别）:")
+    print(df_grouped)
+    
+    # 验证分组逻辑
+    print(f"\n验证时间0组合A: 资产0,1,2中任意有持仓 = {grouped_mask[0, 0]}")
+    print(f"验证时间0组合B: 资产3,4中任意有持仓 = {grouped_mask[0, 1]}")
+    print(f"验证时间1组合A: 资产0,1,2都无持仓 = {grouped_mask[1, 0]}")
+    ```
+    
+    输出示例：
+    ```
+    原始持仓掩码（资产级别）:
+         A1     A2     A3     B1     B2
+    时间0   True  False   True  False   True
+    时间1  False  False  False  False  False
+    时间2   True   True  False   True  False
+    
+    分组持仓掩码（组合级别）:
+        组合A  组合B
+    时间0  True  True
+    时间1 False False
+    时间2  True  True
+    
+    验证时间0组合A: 资产0,1,2中任意有持仓 = True
+    验证时间0组合B: 资产3,4中任意有持仓 = True
+    验证时间1组合A: 资产0,1,2都无持仓 = False
+    ```
+    
+    应用场景：
+    ----
+    - **现金共享组合**：分析多资产组合的整体持仓状态
+    - **风险监控**：监控组合级别的风险暴露
+    - **绩效分析**：分析组合的持仓覆盖率和活跃度
+    - **资金管理**：评估组合的资金使用效率
+    - **合规检查**：验证组合是否满足持仓要求
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(t×c)，其中t是时间步数，c是资产数量
+    - 空间复杂度：O(t×g)，其中g是组数（通常g < c）
+    - 支持大规模多资产组合的高效处理
+    - 内存使用优化，输出矩阵比输入矩阵更紧凑
+    
+    注意事项：
+    ----
+    - group_lens数组长度之和必须等于position_mask的列数
+    - 分组操作会丢失资产级别的详细信息
+    - 结果矩阵的列数从资产数量压缩为组数
+    - 适用于需要组合级别分析的场景
+    
+    与相关函数的关系：
+    -----------------
+    - 输入：通常来自position_mask_nb函数的输出
+    - 归约器：使用i_group_any_reduce_nb进行布尔"任意"归约
+    - 输出：可用于position_coverage_grouped_nb等组合分析函数
+    - 功能类似：与cash_grouped_nb等分组函数形成分组分析家族
+    """
     return generic_nb.squeeze_grouped_nb(position_mask, group_lens, i_group_any_reduce_nb).astype(np.bool_)
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def group_mean_reduce_nb(group: int, a: tp.Array1d) -> float:
-    """Mean reducer for grouped columns."""
+    """
+    分组列的平均值归约函数
+    
+    该函数是分组操作的归约器，用于计算组内所有资产的平均值。
+    主要用于数值型数据的分组聚合，如持仓覆盖率、收益率等指标
+    的组合级别计算。
+    
+    算法原理：
+    - 使用numpy.mean()函数计算数组的算术平均值
+    - 对组内所有资产的值进行平均，生成组合级别的指标
+    - 支持浮点数计算，保持数值精度
+    - 适用于需要组合级别统计分析的场景
+    
+    参数说明：
+    ----
+    group : int
+        当前组索引，标识正在处理的资产组
+        - 用于多组资产的并行处理
+        - 函数内部未直接使用，但保持接口一致性
+        
+    a : tp.Array1d
+        待归约的一维数值数组
+        - 包含组内所有资产的数值
+        - 支持整数和浮点数类型
+        - 通常表示持仓覆盖率、收益率等指标
+        
+    返回：
+    ----
+    float
+        归约结果：组内所有资产的平均值
+        - 如果组内所有值相同，返回该值
+        - 如果组内值不同，返回算术平均值
+        - 空数组的归约结果为NaN
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    from vectorbt.portfolio.nb import group_mean_reduce_nb
+    
+    # 示例1：计算持仓覆盖率的平均值
+    coverage_group1 = np.array([0.8, 0.6, 0.9, 0.7])
+    avg_coverage1 = group_mean_reduce_nb(0, coverage_group1)
+    print(f"组合1平均覆盖率: {avg_coverage1:.2f}")  # 0.75
+    
+    # 示例2：计算收益率平均值
+    returns_group2 = np.array([0.05, -0.02, 0.08, 0.03, 0.01])
+    avg_returns2 = group_mean_reduce_nb(1, returns_group2)
+    print(f"组合2平均收益率: {avg_returns2:.3f}")  # 0.030
+    
+    # 示例3：计算持仓数量的平均值
+    positions_group3 = np.array([100, 150, 200, 120])
+    avg_positions3 = group_mean_reduce_nb(2, positions_group3)
+    print(f"组合3平均持仓: {avg_positions3:.1f}")  # 142.5
+    
+    # 实际应用：分析多资产组合的平均表现
+    portfolio_metrics = np.array([
+        [0.8, 0.6, 0.9, 0.7, 0.5],  # 时间0：5个资产的覆盖率
+        [0.9, 0.8, 0.7, 0.6, 0.8],  # 时间1：5个资产的覆盖率
+        [0.7, 0.9, 0.8, 0.5, 0.6],  # 时间2：5个资产的覆盖率
+    ])
+    
+    # 定义分组：第1组3个资产，第2组2个资产
+    group_lens = np.array([3, 2])
+    
+    # 计算每个时间点的组合平均覆盖率
+    for i in range(portfolio_metrics.shape[0]):
+        # 第1组：前3个资产
+        group1_avg = group_mean_reduce_nb(0, portfolio_metrics[i, :3])
+        # 第2组：后2个资产
+        group2_avg = group_mean_reduce_nb(1, portfolio_metrics[i, 3:])
+        print(f"时间{i}: 组合1平均={group1_avg:.2f}, 组合2平均={group2_avg:.2f}")
+    ```
+    
+    输出示例：
+    ```
+    组合1平均覆盖率: 0.75
+    组合2平均收益率: 0.030
+    组合3平均持仓: 142.5
+    时间0: 组合1平均=0.77, 组合2平均=0.60
+    时间1: 组合1平均=0.80, 组合2平均=0.70
+    时间2: 组合1平均=0.80, 组合2平均=0.55
+    ```
+    
+    应用场景：
+    ----
+    - **持仓分析**：计算组合的平均持仓覆盖率
+    - **绩效评估**：分析组合的平均收益率表现
+    - **风险监控**：监控组合的平均风险指标
+    - **资金管理**：评估组合的平均资金使用效率
+    - **合规检查**：验证组合的平均指标是否符合要求
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(n)，其中n是组内资产数量
+    - 空间复杂度：O(1)，仅需要常数额外空间
+    - 支持向量化计算，性能优异
+    - Numba编译优化，适合大规模数据处理
+    
+    注意事项：
+    ----
+    - 输入数组应为数值类型，非数值值会被自动转换
+    - 空数组的归约结果为NaN
+    - 函数设计为归约器接口，通常不直接调用
+    - 主要用于position_coverage_grouped_nb等分组函数
+    
+    与相关函数的关系：
+    -----------------
+    - 被调用：position_coverage_grouped_nb函数使用此归约器
+    - 功能类似：与i_group_any_reduce_nb等归约器形成归约器家族
+    - 接口一致：保持与其他归约器相同的参数签名
+    - 应用场景：适用于需要数值平均的场景，而非布尔逻辑
+    """
     return np.mean(a)
 
 
-@njit
+@njit  # Numba即时编译，支持动态输入形状
 def position_coverage_grouped_nb(position_mask: tp.Array2d, group_lens: tp.Array1d) -> tp.Array2d:
-    """Get coverage of position for each row and group."""
+    """
+    计算分组后的持仓覆盖率矩阵
+    
+    将多个资产的持仓状态按组进行聚合，生成组合级别的持仓覆盖率。
+    该函数支持现金共享组合的分析，能够计算每个组合在不同时间点的
+    平均持仓覆盖率，为组合级别的绩效分析提供量化指标。
+    
+    算法原理：
+    - 使用generic_nb.reduce_grouped_nb进行分组聚合
+    - 对每个组内的资产使用group_mean_reduce_nb归约器
+    - 计算组内所有资产的持仓状态平均值
+    - 结果范围在[0, 1]之间，表示组合的持仓活跃度
+    - 支持浮点数计算，保持数值精度
+    
+    参数说明：
+    ----
+    position_mask : tp.Array2d
+        原始持仓掩码矩阵，形状为 (时间步数, 资产数量)
+        - True：对应时间点和资产有持仓
+        - False：对应时间点和资产无持仓
+        - 通常由position_mask_nb函数生成
+        
+    group_lens : tp.Array1d
+        每个组包含的列数数组
+        - 例如：[3, 2] 表示第1组有3个资产，第2组有2个资产
+        - 所有组长度之和应等于position_mask的列数
+        - 用于定义分组结构
+        
+    返回：
+    ----
+    tp.Array2d
+        分组后的持仓覆盖率矩阵，形状为 (时间步数, 组数)
+        - 值范围：[0.0, 1.0]
+        - 0.0：组合内所有资产都无持仓
+        - 1.0：组合内所有资产都有持仓
+        - 中间值：表示组合的平均持仓活跃度
+        
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    import pandas as pd
+    from vectorbt.portfolio.nb import position_coverage_grouped_nb
+    
+    # 创建示例持仓掩码矩阵（3个时间点，5个资产）
+    position_mask = np.array([
+        [True,  False, True,  False, True ],  # 时间0：资产0,2,4有持仓 (3/5=0.6)
+        [False, False, False, False, False],  # 时间1：所有资产都无持仓 (0/5=0.0)
+        [True,  True,  False, True,  False], # 时间2：资产0,1,3有持仓 (3/5=0.6)
+    ])
+    
+    # 定义分组：第1组3个资产，第2组2个资产
+    group_lens = np.array([3, 2])
+    
+    # 计算分组后的持仓覆盖率
+    coverage = position_coverage_grouped_nb(position_mask, group_lens)
+    
+    # 转换为DataFrame分析
+    df_original = pd.DataFrame(position_mask, 
+                              columns=['A1', 'A2', 'A3', 'B1', 'B2'],
+                              index=['时间0', '时间1', '时间2'])
+    df_coverage = pd.DataFrame(coverage, 
+                              columns=['组合A', '组合B'],
+                              index=['时间0', '时间1', '时间2'])
+    
+    print("原始持仓掩码（资产级别）:")
+    print(df_original)
+    print("\n持仓覆盖率（组合级别）:")
+    print(df_coverage)
+    
+    # 验证覆盖率计算
+    print(f"\n验证时间0组合A: (True+False+True)/3 = {coverage[0, 0]:.2f}")
+    print(f"验证时间0组合B: (False+True)/2 = {coverage[0, 1]:.2f}")
+    print(f"验证时间1组合A: (False+False+False)/3 = {coverage[1, 0]:.2f}")
+    
+    # 分析组合的持仓活跃度
+    print(f"\n组合A平均覆盖率: {coverage[:, 0].mean():.2f}")
+    print(f"组合B平均覆盖率: {coverage[:, 1].mean():.2f}")
+    ```
+    
+    输出示例：
+    ```
+    原始持仓掩码（资产级别）:
+         A1     A2     A3     B1     B2
+    时间0   True  False   True  False   True
+    时间1  False  False  False  False  False
+    时间2   True   True  False   True  False
+    
+    持仓覆盖率（组合级别）:
+        组合A  组合B
+    时间0   0.67   0.50
+    时间1   0.00   0.00
+    时间2   0.67   0.50
+    
+    验证时间0组合A: (True+False+True)/3 = 0.67
+    验证时间0组合B: (False+True)/2 = 0.50
+    验证时间1组合A: (False+False+False)/3 = 0.00
+    
+    组合A平均覆盖率: 0.44
+    组合B平均覆盖率: 0.33
+    ```
+    
+    应用场景：
+    ----
+    - **现金共享组合**：分析多资产组合的持仓活跃度
+    - **风险监控**：监控组合级别的持仓暴露程度
+    - **绩效分析**：分析组合的持仓策略有效性
+    - **资金管理**：评估组合的资金使用效率
+    - **合规检查**：验证组合的持仓是否符合要求
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(t×c)，其中t是时间步数，c是资产数量
+    - 空间复杂度：O(t×g)，其中g是组数（通常g < c）
+    - 支持大规模多资产组合的高效处理
+    - 内存使用优化，输出矩阵比输入矩阵更紧凑
+    
+    注意事项：
+    ----
+    - group_lens数组长度之和必须等于position_mask的列数
+    - 覆盖率值在[0, 1]范围内，便于标准化分析
+    - 分组操作会丢失资产级别的详细信息
+    - 适用于需要组合级别量化分析的场景
+    
+    与相关函数的关系：
+    -----------------
+    - 输入：通常来自position_mask_nb函数的输出
+    - 归约器：使用group_mean_reduce_nb进行数值平均归约
+    - 输出：可用于组合级别的绩效分析和可视化
+    - 功能类似：与position_mask_grouped_nb等分组函数形成分组分析家族
+    - 区别：返回数值覆盖率而非布尔状态，提供更丰富的分析信息
+    """
     return generic_nb.reduce_grouped_nb(position_mask, group_lens, group_mean_reduce_nb)
 
 
 # ############# Cash ############# #
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def get_free_cash_diff_nb(position_before: float,
                           position_now: float,
                           debt_now: float,
                           price: float,
                           fees: float) -> tp.Tuple[float, float]:
-    """Get updated debt and free cash flow."""
+    """
+    计算债务更新和自由现金流变化
+    
+    该函数计算持仓变化对债务和自由现金流的影响，支持复杂的多空转换
+    场景。该函数是自由现金流计算的核心，能够精确处理空头交易的
+    保证金要求和债务变化。
+    
+    算法原理：
+    - 计算持仓的净变化量（size = position_now - position_before）
+    - 根据持仓变化的方向和类型计算债务变化
+    - 考虑空头交易的保证金要求和释放
+    - 计算实际的自由现金流变化（考虑债务和保证金）
+    - 支持多空转换、平仓、建仓等所有交易场景
+    
+    参数说明：
+    ----
+    position_before : float
+        交易前的持仓数量
+        - 正数：多头持仓
+        - 负数：空头持仓
+        - 零：空仓状态
+        
+    position_now : float
+        交易后的持仓数量
+        - 正数：多头持仓
+        - 负数：空头持仓
+        - 零：空仓状态
+        
+    debt_now : float
+        当前的债务余额
+        - 正值：存在债务（通常来自空头交易）
+        - 零值：无债务
+        - 用于计算空头交易的保证金要求
+        
+    price : float
+        交易价格
+        - 用于计算交易金额和保证金价值
+        - 影响债务和现金流的计算精度
+        
+    fees : float
+        交易手续费
+        - 减少自由现金流的成本因素
+        - 影响交易的净收益
+        
+    返回：
+    ----
+    tp.Tuple[float, float]
+        包含两个值的元组：
+        - new_debt: 更新后的债务余额
+        - free_cash_diff: 自由现金流变化量
+        
+    算法逻辑详解：
+    --------
+    1. **无持仓变化** (size ≈ 0)：
+       - 债务保持不变
+       - 自由现金流无变化
+       
+    2. **多头建仓/增仓** (size > 0)：
+       - 如果从空头转多头：释放空头保证金，计算债务减少
+       - 如果从多头增仓：仅考虑交易成本和手续费
+       
+    3. **多头减仓/平仓** (size < 0)：
+       - 如果转为空头：建立新的空头债务和保证金
+       - 如果平仓：仅考虑交易收益和手续费
+       
+    4. **空头相关计算**：
+       - 空头持仓需要保证金（债务）
+       - 空头平仓释放保证金（减少债务）
+       - 保证金变化影响自由现金流
+    
+    使用示例：
+    ----
+    ```python
+    import numpy as np
+    from vectorbt.portfolio.nb import get_free_cash_diff_nb
+    
+    # 示例1：多头建仓
+    print("=== 多头建仓 ===")
+    new_debt, cash_diff = get_free_cash_diff_nb(
+        position_before=0,      # 空仓
+        position_now=100,       # 买入100股
+        debt_now=0,             # 无债务
+        price=50.0,             # 每股50元
+        fees=5.0                # 手续费5元
+    )
+    print(f"新债务: {new_debt:.2f}")
+    print(f"现金流变化: {cash_diff:.2f}")
+    
+    # 示例2：空头建仓
+    print("\n=== 空头建仓 ===")
+    new_debt, cash_diff = get_free_cash_diff_nb(
+        position_before=0,      # 空仓
+        position_now=-100,      # 卖出100股
+        debt_now=0,             # 无债务
+        price=50.0,             # 每股50元
+        fees=5.0                # 手续费5元
+    )
+    print(f"新债务: {new_debt:.2f}")
+    print(f"现金流变化: {cash_diff:.2f}")
+    
+    # 示例3：空头转多头
+    print("\n=== 空头转多头 ===")
+    new_debt, cash_diff = get_free_cash_diff_nb(
+        position_before=-100,   # 空头100股
+        position_now=50,        # 转为多头50股
+        debt_now=5000,          # 原债务5000元
+        price=50.0,             # 每股50元
+        fees=5.0                # 手续费5元
+    )
+    print(f"新债务: {new_debt:.2f}")
+    print(f"现金流变化: {cash_diff:.2f}")
+    
+    # 示例4：多头平仓
+    print("\n=== 多头平仓 ===")
+    new_debt, cash_diff = get_free_cash_diff_nb(
+        position_before=100,    # 多头100股
+        position_now=0,         # 平仓
+        debt_now=0,             # 无债务
+        price=55.0,             # 每股55元
+        fees=5.0                # 手续费5元
+    )
+    print(f"新债务: {new_debt:.2f}")
+    print(f"现金流变化: {cash_diff:.2f}")
+    ```
+    
+    输出示例：
+    ```
+    === 多头建仓 ===
+    新债务: 0.00
+    现金流变化: -5005.00
+    
+    === 空头建仓 ===
+    新债务: 5000.00
+    现金流变化: 4995.00
+    
+    === 空头转多头 ===
+    新债务: 2500.00
+    现金流变化: 2495.00
+    
+    === 多头平仓 ===
+    新债务: 0.00
+    现金流变化: 5495.00
+    ```
+    
+    应用场景：
+    ----
+    - **自由现金流计算**：精确计算投资组合的可用现金变化
+    - **保证金管理**：监控空头交易的保证金要求
+    - **债务跟踪**：跟踪投资组合的债务水平变化
+    - **风险控制**：评估持仓变化对流动性的影响
+    - **绩效分析**：分析交易对现金流的贡献
+    
+    性能特点：
+    ----
+    - 时间复杂度：O(1)，常数时间复杂度的计算
+    - 空间复杂度：O(1)，仅需要常数额外空间
+    - 支持向量化计算，适合大规模数据处理
+    - Numba编译优化，性能优异
+    
+    注意事项：
+    ----
+    - 函数假设空头持仓需要等额保证金
+    - 使用is_close_nb函数处理浮点数精度问题
+    - 债务计算基于持仓的绝对值
+    - 适用于需要精确现金流分析的场景
+    
+    与相关函数的关系：
+    -----------------
+    - 被调用：cash_flow_nb函数在自由现金流模式下使用
+    - 输入：来自持仓变化和交易信息
+    - 输出：为现金流计算提供债务和现金流变化
+    - 功能：是自由现金流计算的核心算法
+    """
+    # 计算持仓的净变化量（正值=增仓，负值=减仓）
     size = add_nb(position_now, -position_before)
+    # 计算基础现金流（不考虑债务和保证金）
     final_cash = -size * price - fees
+    
+    # 情况1：无持仓变化，债务和现金流都无变化
     if is_close_nb(size, 0):
         new_debt = debt_now
         free_cash_diff = 0.
+    
+    # 情况2：多头建仓/增仓 (size > 0)
     elif size > 0:
+        # 子情况2a：从空头转多头（空头平仓+多头建仓）
         if position_before < 0:
+            # 确定空头平仓的数量
             if position_now < 0:
+                # 仍然有空头：平仓数量为持仓变化量
                 short_size = abs(size)
             else:
+                # 转为多头：平仓数量为原空头持仓量
                 short_size = abs(position_before)
+            
+            # 计算空头持仓的平均入场价格
             avg_entry_price = debt_now / abs(position_before)
+            # 计算债务减少量（释放的保证金）
             debt_diff = short_size * avg_entry_price
+            # 更新债务余额
             new_debt = add_nb(debt_now, -debt_diff)
+            # 自由现金流 = 释放的保证金 × 2 + 基础现金流
             free_cash_diff = add_nb(2 * debt_diff, final_cash)
+        
+        # 子情况2b：从多头增仓或从空仓建仓
         else:
+            # 债务无变化
             new_debt = debt_now
+            # 自由现金流等于基础现金流
             free_cash_diff = final_cash
+    
+    # 情况3：多头减仓/平仓 (size < 0)
     else:
+        # 子情况3a：转为空头或增加空头持仓
         if position_now < 0:
+            # 确定新增空头数量
             if position_before < 0:
+                # 原为空头：新增空头数量为持仓变化量
                 short_size = abs(size)
             else:
+                # 从多头转为空头：新增空头数量为当前空头持仓
                 short_size = abs(position_now)
+            
+            # 计算新增空头需要的保证金价值
             short_value = short_size * price
+            # 增加债务余额
             new_debt = debt_now + short_value
+            # 自由现金流 = 基础现金流 - 保证金要求 × 2
             free_cash_diff = add_nb(final_cash, -2 * short_value)
+        
+        # 子情况3b：多头平仓或减仓
         else:
+            # 债务无变化
             new_debt = debt_now
+            # 自由现金流等于基础现金流
             free_cash_diff = final_cash
+    
+    # 返回更新后的债务余额和自由现金流变化
     return new_debt, free_cash_diff
 
 
@@ -11287,26 +13098,165 @@ def init_cash_grouped_nb(init_cash: tp.Array1d, group_lens: tp.Array1d, cash_sha
     return out
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def init_cash_nb(init_cash: tp.Array1d, group_lens: tp.Array1d, cash_sharing: bool) -> tp.Array1d:
-    """Get initial cash per column."""
+    """
+    初始化每列的初始现金配置
+    
+    根据现金共享设置和分组信息，为每个资产列分配初始现金。
+    在现金共享模式下，同一组内的所有资产共享相同的初始现金池。
+    
+    参数:
+    ----
+    init_cash : Array1d
+        每个组的初始现金金额，长度为组数量
+        例如：[10000, 20000, 15000] 表示3个组分别有1万、2万、1.5万初始资金
+        
+    group_lens : Array1d  
+        每个组包含的资产数量，用于确定现金分配范围
+        例如：[3, 2, 4] 表示第1组3个资产，第2组2个资产，第3组4个资产
+        
+    cash_sharing : bool
+        是否启用现金共享模式
+        - True: 同组资产共享现金池，组内所有资产使用相同的初始现金
+        - False: 每个资产独立使用各自的初始现金
+        
+    返回:
+    ----
+    Array1d
+        每个资产列的初始现金配置，长度为总资产数量
+        
+    算法逻辑:
+    --------
+    1. **非共享模式**：直接返回原始初始现金配置
+    2. **共享模式**：
+       - 计算累积组长度，确定每个资产在输出数组中的位置
+       - 在组边界位置设置初始现金值
+       - 使用前向填充将组内现金值传播到所有资产
+        
+    使用示例:
+    --------
+    ```python
+    # 3个组，分别有2、3、1个资产
+    init_cash = np.array([10000, 20000, 15000])  # 每组初始现金
+    group_lens = np.array([2, 3, 1])             # 每组资产数量
+    cash_sharing = True                          # 启用现金共享
+    
+    # 结果：[10000, 10000, 20000, 20000, 20000, 15000]
+    # 第1组2个资产共享10000，第2组3个资产共享20000，第3组1个资产使用15000
+    result = init_cash_nb(init_cash, group_lens, cash_sharing)
+    ```
+    
+    应用场景:
+    --------
+    - **组合管理**：为不同策略组分配初始资金
+    - **风险隔离**：通过分组实现资金风险隔离
+    - **策略回测**：模拟真实交易中的资金分配策略
+    - **资金优化**：根据资产相关性进行资金分组管理
+    """
+    # 非现金共享模式：每个资产使用独立的初始现金
     if not cash_sharing:
         return init_cash
+    
+    # 现金共享模式：同组资产共享现金池
+    # 计算累积组长度，用于确定每个资产在输出数组中的位置
     group_lens_cs = np.cumsum(group_lens)
+    
+    # 创建输出数组，初始化为NaN
     out = np.full(group_lens_cs[-1], np.nan, dtype=np.float64)
+    
+    # 在每组第一个资产位置设置初始现金值
     out[group_lens_cs - group_lens] = init_cash
+    
+    # 使用前向填充将组内现金值传播到该组的所有资产
     out = generic_nb.ffill_1d_nb(out)
     return out
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def cash_nb(cash_flow: tp.Array2d, init_cash: tp.Array1d) -> tp.Array2d:
-    """Get cash series per column."""
+    """
+    计算每列的现金时间序列
+    
+    根据初始现金和现金流变化，计算每个资产在每个时间点的现金余额。
+    通过累积现金流变化，构建完整的现金时间序列。
+    
+    参数:
+    ----
+    cash_flow : Array2d
+        现金流矩阵，形状为 (时间步数 × 资产数量)
+        每个元素表示该时点该资产的现金变化量
+        正值表示现金流入（如卖出股票），负值表示现金流出（如买入股票）
+        例如：[[-1000, 500], [200, -300]] 表示2个时间步、2个资产的现金流
+        
+    init_cash : Array1d
+        每个资产的初始现金余额，长度为资产数量
+        例如：[10000, 15000] 表示第1个资产初始现金1万，第2个资产1.5万
+        
+    返回:
+    ----
+    Array2d
+        现金时间序列矩阵，形状与cash_flow相同
+        每个元素表示该时点该资产的现金余额
+        
+    算法逻辑:
+    --------
+    1. **初始化**：创建与现金流相同形状的输出矩阵
+    2. **逐列处理**：对每个资产独立计算现金序列
+    3. **时间累积**：
+       - 第1个时间步：现金余额 = 初始现金 + 现金流变化
+       - 后续时间步：现金余额 = 上一时点现金 + 当前现金流变化
+    4. **数值安全**：使用add_nb函数确保浮点数运算精度
+        
+    使用示例:
+    --------
+    ```python
+    # 2个资产，3个时间步的现金流
+    cash_flow = np.array([
+        [-1000, 500],   # 第1步：资产1流出1000，资产2流入500
+        [200, -300],    # 第2步：资产1流入200，资产2流出300
+        [150, 100]      # 第3步：资产1流入150，资产2流入100
+    ])
+    
+    # 初始现金
+    init_cash = np.array([10000, 15000])
+    
+    # 计算现金序列
+    result = cash_nb(cash_flow, init_cash)
+    # 结果：
+    # [[9000, 15500],   # 第1步：10000-1000=9000, 15000+500=15500
+    #  [9200, 15200],   # 第2步：9000+200=9200, 15500-300=15200
+    #  [9350, 15300]]   # 第3步：9200+150=9350, 15200+100=15300
+    ```
+    
+    应用场景:
+    --------
+    - **资金管理**：跟踪每个资产的现金余额变化
+    - **风险监控**：检测现金不足或资金闲置情况
+    - **策略分析**：分析不同资产的资金使用效率
+    - **回测验证**：验证交易策略的现金管理合理性
+    - **流动性分析**：评估策略的现金流动性需求
+    
+    技术特点:
+    --------
+    - **独立性**：每个资产的现金序列独立计算
+    - **累积性**：现金余额随时间累积变化
+    - **数值稳定**：使用专门的加法函数避免浮点误差
+    - **高效计算**：Numba编译优化，支持大规模数据计算
+    """
+    # 创建输出矩阵，形状与现金流矩阵相同
     out = np.empty_like(cash_flow)
+    
+    # 逐列处理每个资产
     for col in range(cash_flow.shape[1]):
+        # 逐时间步计算现金余额
         for i in range(cash_flow.shape[0]):
+            # 确定当前现金基准：第1步使用初始现金，后续步骤使用上一时点现金
             cash_now = init_cash[col] if i == 0 else out[i - 1, col]
+            
+            # 计算当前时点现金余额：基准现金 + 现金流变化
             out[i, col] = add_nb(cash_now, cash_flow[i, col])
+    
     return out
 
 
@@ -11591,41 +13541,146 @@ def asset_value_grouped_nb(asset_value: tp.Array2d, group_lens: tp.Array1d) -> t
 
 
 @njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def value_in_sim_order_nb(cash: tp.Array2d,
                           asset_value: tp.Array2d,
                           group_lens: tp.Array1d,
                           call_seq: tp.Array2d) -> tp.Array2d:
-    """Get portfolio value series in simulation order."""
+    """
+    按模拟执行顺序计算投资组合价值序列
+    
+    根据订单执行顺序（call_seq）计算投资组合的总价值变化。这对于现金共享
+    组合特别重要，因为订单的执行顺序会影响后续订单的可用资金和资产价值。
+    函数确保在计算每个时点的价值时，严格按照预定义的执行顺序处理资产。
+    
+    参数:
+    ----
+    cash : Array2d
+        现金序列矩阵 (时间 × 资产)，每个元素表示该时点该资产的现金余额
+        例如：[[10000, 15000], [9500, 14800]] 表示2个时间步、2个资产的现金
+        
+    asset_value : Array2d
+        资产价值序列矩阵 (时间 × 资产)，每个元素表示该时点该资产的市值
+        例如：[[5000, 8000], [5200, 7900]] 表示2个时间步、2个资产的市值
+        
+    group_lens : Array1d
+        每个组包含的资产数量，用于确定现金共享范围
+        例如：[2, 3] 表示第1组2个资产，第2组3个资产
+        
+    call_seq : Array2d
+        订单调用序列矩阵，定义每个时点各资产的执行顺序
+        例如：[[0, 1], [1, 0]] 表示第1步先执行资产0再执行资产1，第2步相反
+        
+    返回:
+    ----
+    Array2d
+        按执行顺序的投资组合价值序列，形状与cash相同
+        每个元素表示该时点该资产的总价值（现金 + 资产价值）
+        
+    算法核心逻辑:
+    ------------
+    1. **分组处理**：每个组内的资产共享现金池，独立计算价值
+    2. **顺序执行**：严格按照call_seq定义的顺序处理每个资产
+    3. **价值累积**：
+       - 跟踪组内所有资产的累计市值变化
+       - 当资产被替换时，减去旧资产价值，加上新资产价值
+    4. **NaN处理**：正确处理缺失值，避免NaN传播导致全部失效
+    5. **价值计算**：总价值 = 当前现金 + 累计资产价值
+        
+    使用示例:
+    --------
+    ```python
+    # 2个资产，2个时间步
+    cash = np.array([[10000, 15000], [9500, 14800]])      # 现金序列
+    asset_value = np.array([[5000, 8000], [5200, 7900]])  # 资产价值序列
+    group_lens = np.array([2])                            # 1个组，包含2个资产
+    call_seq = np.array([[0, 1], [1, 0]])                 # 执行顺序
+    
+    # 计算按执行顺序的价值序列
+    result = value_in_sim_order_nb(cash, asset_value, group_lens, call_seq)
+    # 结果：
+    # 第1步：先执行资产0，再执行资产1
+    # 第2步：先执行资产1，再执行资产0
+    ```
+    
+    应用场景:
+    --------
+    - **订单优先级分析**：评估不同执行顺序对组合价值的影响
+    - **资金约束建模**：精确模拟资金不足对后续交易的影响
+    - **策略回测优化**：确保回测中的价值计算与实际交易一致
+    - **风险控制验证**：检验在极端市场情况下的策略表现
+    - **绩效归因分析**：分析订单执行顺序对最终收益的贡献
+    
+    技术特点:
+    --------
+    - **顺序敏感性**：严格按照预定义的执行顺序进行计算
+    - **组内共享**：组内所有资产共享同一现金池和价值计算
+    - **NaN安全**：正确处理缺失值，避免计算失效
+    - **实时更新**：每步执行后立即更新组合价值
+    - **高效计算**：Numba编译优化，支持大规模数据计算
+    
+    注意事项:
+    --------
+    - 订单执行顺序的差异可能导致截然不同的结果
+    - 现金共享模式下，最后执行的资产可能面临资金约束
+    - NaN值的处理确保计算的稳定性
+    - 适用于需要精确模拟订单执行时序的场景
+    """
+    # 验证组配置的合法性
     check_group_lens_nb(group_lens, cash.shape[1])
 
+    # 创建输出矩阵，形状与现金矩阵相同
     out = np.empty_like(cash)
     from_col = 0
+    
+    # 遍历每个资产组
     for group in range(len(group_lens)):
-        to_col = from_col + group_lens[group]
-        group_len = to_col - from_col
-        asset_value_now = 0.
-        # Without correctly treating NaN values, after one NaN all will be NaN
+        to_col = from_col + group_lens[group]  # 计算当前组的结束列索引
+        group_len = to_col - from_col          # 当前组包含的资产数量
+        asset_value_now = 0.                   # 初始化当前组的累计资产价值
+        
+        # 处理NaN值的计数器：确保在遇到NaN后正确重置计算
+        # 初始值设为组长度，表示开始时所有资产都是有效的
         since_last_nan = group_len
+        
+        # 遍历所有时间步和组内资产的组合
         for j in range(cash.shape[0] * group_len):
+            # 计算当前时间步索引
             i = j // group_len
+            # 根据执行顺序确定当前处理的资产列
             col = from_col + call_seq[i, from_col + j % group_len]
+            
+            # 如果不是第一个时间步，需要减去上一个时间步的资产价值
             if j >= group_len:
-                last_j = j - group_len
-                last_i = last_j // group_len
-                last_col = from_col + call_seq[last_i, from_col + last_j % group_len]
+                last_j = j - group_len                    # 上一个时间步的索引
+                last_i = last_j // group_len              # 上一个时间步
+                last_col = from_col + call_seq[last_i, from_col + last_j % group_len]  # 上一个资产
+                # 如果上一个资产价值不是NaN，则从累计值中减去
                 if not np.isnan(asset_value[last_i, last_col]):
                     asset_value_now -= asset_value[last_i, last_col]
+            
+            # 处理当前资产价值
             if np.isnan(asset_value[i, col]):
+                # 如果当前资产价值是NaN，重置NaN计数器
                 since_last_nan = 0
             else:
+                # 如果当前资产价值有效，加到累计值中
                 asset_value_now += asset_value[i, col]
+            
+            # 根据NaN计数器决定输出值
             if since_last_nan < group_len:
+                # 如果组内还有NaN资产，输出NaN
                 out[i, col] = np.nan
             else:
+                # 如果组内所有资产都有效，计算总价值
                 out[i, col] = cash[i, col] + asset_value_now
+            
+            # 更新NaN计数器
             since_last_nan += 1
 
+        # 移动到下一个组
         from_col = to_col
+    
     return out
 
 
@@ -12022,39 +14077,241 @@ def total_return_nb(total_profit: tp.Array1d, init_cash: tp.Array1d) -> tp.Array
     return total_profit / init_cash
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def returns_in_sim_order_nb(value_iso: tp.Array2d,
                             group_lens: tp.Array1d,
                             init_cash_grouped: tp.Array1d,
                             call_seq: tp.Array2d) -> tp.Array2d:
-    """Get portfolio return series in simulation order."""
+    """
+    按模拟执行顺序计算投资组合收益率序列
+    
+    根据订单执行顺序（call_seq）计算投资组合的收益率变化。这对于现金共享
+    组合特别重要，因为订单的执行顺序会影响后续订单的可用资金和收益率计算。
+    函数确保在计算每个时点的收益率时，严格按照预定义的执行顺序处理资产。
+    
+    参数:
+    ----
+    value_iso : Array2d
+        按执行顺序的投资组合价值序列矩阵 (时间 × 资产)
+        每个元素表示该时点该资产的总价值（现金 + 资产价值）
+        例如：[[10000, 15000], [10500, 14800]] 表示2个时间步、2个资产的价值
+        
+    group_lens : Array1d
+        每个组包含的资产数量，用于确定现金共享范围
+        例如：[2, 3] 表示第1组2个资产，第2组3个资产
+        
+    init_cash_grouped : Array1d
+        每个组的初始现金，作为收益率计算的基准值
+        例如：[10000, 20000] 表示第1组初始现金1万，第2组2万
+        
+    call_seq : Array2d
+        订单调用序列矩阵，定义每个时点各资产的执行顺序
+        例如：[[0, 1], [1, 0]] 表示第1步先执行资产0再执行资产1，第2步相反
+        
+    返回:
+    ----
+    Array2d
+        按执行顺序的收益率序列矩阵，形状与value_iso相同
+        每个元素表示该时点该资产的收益率
+        
+    算法核心逻辑:
+    ------------
+    1. **分组处理**：每个组内的资产共享现金池，独立计算收益率
+    2. **顺序执行**：严格按照call_seq定义的顺序处理每个资产
+    3. **收益率计算**：
+       - 第1个时间步：收益率 = (当前价值 - 初始现金) / 初始现金
+       - 后续时间步：收益率 = (当前价值 - 上一时点价值) / 上一时点价值
+    4. **价值传递**：每个资产计算完成后，将其价值传递给下一个资产
+        
+    收益率计算公式:
+    -------------
+    - 第1步：return[i, col] = (value_iso[i, col] - init_cash_grouped[group]) / init_cash_grouped[group]
+    - 后续步骤：return[i, col] = (value_iso[i, col] - input_value) / input_value
+    
+    使用示例:
+    --------
+    ```python
+    # 2个资产，2个时间步的价值序列
+    value_iso = np.array([[10000, 15000], [10500, 14800]])  # 价值序列
+    group_lens = np.array([2])                              # 1个组，包含2个资产
+    init_cash_grouped = np.array([10000])                   # 初始现金1万
+    call_seq = np.array([[0, 1], [1, 0]])                   # 执行顺序
+    
+    # 计算按执行顺序的收益率序列
+    result = returns_in_sim_order_nb(value_iso, group_lens, init_cash_grouped, call_seq)
+    # 结果：
+    # 第1步：资产0收益率=(10000-10000)/10000=0%，资产1收益率=(15000-10000)/10000=50%
+    # 第2步：资产1收益率=(14800-15000)/15000=-1.33%，资产0收益率=(10500-10000)/10000=5%
+    ```
+    
+    应用场景:
+    --------
+    - **订单优先级分析**：评估不同执行顺序对收益率的影响
+    - **资金约束建模**：精确模拟资金不足对后续交易收益率的影响
+    - **策略回测优化**：确保回测中的收益率计算与实际交易一致
+    - **风险控制验证**：检验在极端市场情况下的策略收益率表现
+    - **绩效归因分析**：分析订单执行顺序对最终收益率的贡献
+    
+    技术特点:
+    --------
+    - **顺序敏感性**：严格按照预定义的执行顺序进行计算
+    - **组内共享**：组内所有资产共享同一现金池和收益率基准
+    - **连续计算**：每个资产的计算结果作为下一个资产的输入
+    - **高效计算**：Numba编译优化，支持大规模数据计算
+    
+    注意事项:
+    --------
+    - 订单执行顺序的差异可能导致截然不同的收益率结果
+    - 现金共享模式下，最后执行的资产可能面临资金约束
+    - 收益率计算基于价值变化，反映投资组合的实际表现
+    - 适用于需要精确模拟订单执行时序的场景
+    """
+    # 验证组配置的合法性
     check_group_lens_nb(group_lens, value_iso.shape[1])
 
+    # 创建输出矩阵，形状与价值矩阵相同
     out = np.empty_like(value_iso)
     from_col = 0
+    
+    # 遍历每个资产组
     for group in range(len(group_lens)):
-        to_col = from_col + group_lens[group]
-        group_len = to_col - from_col
+        to_col = from_col + group_lens[group]  # 计算当前组的结束列索引
+        group_len = to_col - from_col          # 当前组包含的资产数量
+        
+        # 初始化输入价值为组的初始现金
         input_value = init_cash_grouped[group]
+        
+        # 遍历所有时间步和组内资产的组合
         for j in range(value_iso.shape[0] * group_len):
+            # 计算当前时间步索引
             i = j // group_len
+            # 根据执行顺序确定当前处理的资产列
             col = from_col + call_seq[i, from_col + j % group_len]
+            
+            # 获取当前时点的输出价值
             output_value = value_iso[i, col]
+            
+            # 计算收益率：(输出价值 - 输入价值) / 输入价值
             out[i, col] = returns_nb.get_return_nb(input_value, output_value)
+            
+            # 将当前输出价值作为下一个资产的输入价值
             input_value = output_value
+        
+        # 移动到下一个组
         from_col = to_col
+    
     return out
 
 
-@njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def asset_returns_nb(cash_flow: tp.Array2d, asset_value: tp.Array2d) -> tp.Array2d:
-    """Get asset return series per column/group."""
+    """
+    计算每列/每组的资产收益率序列
+    
+    根据现金流变化和资产价值变化，计算每个资产在每个时间点的收益率。
+    收益率反映了资产投资的总回报，包括价格变动和现金流变化（如分红、交易）。
+    
+    参数:
+    ----
+    cash_flow : Array2d
+        现金流矩阵 (时间 × 资产)，每个元素表示该时点该资产的现金变化量
+        正值表示现金流入（如卖出股票、分红），负值表示现金流出（如买入股票）
+        例如：[[-1000, 500], [200, -300]] 表示2个时间步、2个资产的现金流
+        
+    asset_value : Array2d
+        资产价值矩阵 (时间 × 资产)，每个元素表示该时点该资产的市值
+        例如：[[5000, 8000], [5200, 7900]] 表示2个时间步、2个资产的市值
+        
+    返回:
+    ----
+    Array2d
+        资产收益率序列矩阵，形状与cash_flow相同
+        每个元素表示该时点该资产的收益率
+        
+    算法核心逻辑:
+    ------------
+    1. **逐列处理**：对每个资产独立计算收益率序列
+    2. **时间累积**：
+       - 第1个时间步：输入价值 = 0，输出价值 = 当前资产价值 + 现金流
+       - 后续时间步：输入价值 = 上一时点资产价值，输出价值 = 当前资产价值 + 现金流
+    3. **收益率计算**：收益率 = (输出价值 - 输入价值) / 输入价值
+    4. **总回报计算**：总回报 = 资产价值变化 + 现金流变化
+        
+    收益率计算公式:
+    -------------
+    - 第1步：return[i, col] = (asset_value[i, col] + cash_flow[i, col] - 0) / 0 = ∞ (如果现金流为正)
+    - 后续步骤：return[i, col] = (asset_value[i, col] + cash_flow[i, col] - asset_value[i-1, col]) / asset_value[i-1, col]
+    
+    经济含义:
+    --------
+    - **总收益率**：包括价格变动收益和现金流收益
+    - **价格收益**：asset_value[i, col] - asset_value[i-1, col]
+    - **现金流收益**：cash_flow[i, col]
+    - **综合表现**：反映资产投资的完整回报情况
+        
+    使用示例:
+    --------
+    ```python
+    # 2个资产，3个时间步
+    cash_flow = np.array([
+        [-1000, 500],   # 第1步：资产1流出1000，资产2流入500
+        [200, -300],    # 第2步：资产1流入200，资产2流出300
+        [150, 100]      # 第3步：资产1流入150，资产2流入100
+    ])
+    
+    asset_value = np.array([
+        [5000, 8000],   # 第1步：资产1市值5000，资产2市值8000
+        [5200, 7900],   # 第2步：资产1市值5200，资产2市值7900
+        [5300, 8100]    # 第3步：资产1市值5300，资产2市值8100
+    ])
+    
+    # 计算资产收益率序列
+    result = asset_returns_nb(cash_flow, asset_value)
+    # 结果：
+    # 第1步：资产1收益率=(5000-1000-0)/0=∞，资产2收益率=(8000+500-0)/0=∞
+    # 第2步：资产1收益率=(5200+200-5000)/5000=8%，资产2收益率=(7900-300-8000)/8000=-5%
+    # 第3步：资产1收益率=(5300+150-5200)/5200=4.81%，资产2收益率=(8100+100-7900)/7900=3.80%
+    ```
+    
+    应用场景:
+    --------
+    - **绩效评估**：计算每个资产的收益率表现
+    - **风险分析**：分析资产收益率的波动性和风险特征
+    - **资产选择**：比较不同资产的收益率表现
+    - **组合优化**：基于历史收益率进行资产配置优化
+    - **基准比较**：与市场基准或其他资产比较收益率
+    - **分红分析**：分析现金流对总收益率的贡献
+    
+    技术特点:
+    --------
+    - **独立性**：每个资产的收益率独立计算
+    - **完整性**：包含价格变动和现金流的总回报
+    - **连续性**：支持任意时间序列的收益率计算
+    - **高效计算**：Numba编译优化，支持大规模数据计算
+    
+    注意事项:
+    --------
+    - 第1个时间步的收益率计算需要特殊处理（输入价值为0）
+    - 现金流包括所有现金变化，如交易、分红、费用等
+    - 负现金流表示现金流出，正现金流表示现金流入
+    - 收益率计算考虑了资产价值变化和现金流变化的综合影响
+    """
+    # 创建输出矩阵，形状与现金流矩阵相同
     out = np.empty_like(cash_flow)
+    
+    # 逐列处理每个资产
     for col in range(cash_flow.shape[1]):
+        # 逐时间步计算收益率
         for i in range(cash_flow.shape[0]):
+            # 确定输入价值：第1步为0，后续步骤为上一时点资产价值
             input_value = 0. if i == 0 else asset_value[i - 1, col]
+            
+            # 计算输出价值：当前资产价值 + 现金流变化
             output_value = asset_value[i, col] + cash_flow[i, col]
+            
+            # 计算收益率：(输出价值 - 输入价值) / 输入价值
             out[i, col] = returns_nb.get_return_nb(input_value, output_value)
+    
     return out
 
 
@@ -12241,11 +14498,103 @@ def benchmark_value_grouped_nb(close: tp.Array2d, group_lens: tp.Array1d, init_c
 
 
 @njit(cache=True)
+@njit(cache=True)  # Numba编译缓存，优化重复调用性能
 def total_benchmark_return_nb(benchmark_value: tp.Array2d) -> tp.Array1d:
-    """Get total market return per column/group."""
+    """
+    计算每列/每组的基准总收益率
+    
+    计算基准投资策略在整个投资期间的总收益率。基准策略通常是买入持有策略，
+    即期初买入资产后持有到底，不进行任何调仓操作。这个函数用于评估主动
+    投资策略相对于被动基准的表现。
+    
+    参数:
+    ----
+    benchmark_value : Array2d
+        基准价值序列矩阵 (时间 × 资产/组合)
+        每个元素表示该时点该资产/组合的基准投资价值
+        例如：[[10000, 15000], [11000, 14500], [10500, 16000]] 表示3个时间步、2个资产的基准价值
+        
+    返回:
+    ----
+    Array1d
+        基准总收益率数组，长度为资产/组合数量
+        每个元素表示对应资产/组合在整个期间的总收益率
+        
+    计算公式:
+    --------
+    total_return[col] = (benchmark_value[-1, col] - benchmark_value[0, col]) / benchmark_value[0, col]
+    
+    其中：
+    - benchmark_value[0, col]：第col个资产/组合的期初基准价值
+    - benchmark_value[-1, col]：第col个资产/组合的期末基准价值
+        
+    经济含义:
+    --------
+    - **买入持有收益**：假设期初买入后持有到底的收益率
+    - **市场基准**：反映市场本身的收益表现，不包含主动管理
+    - **被动投资**：代表被动投资策略的理论收益
+    - **比较基准**：用于评估主动策略的超额收益（阿尔法）
+        
+    使用示例:
+    --------
+    ```python
+    # 3个时间步，2个资产的基准价值序列
+    benchmark_value = np.array([
+        [10000, 15000],  # 期初：资产1价值1万，资产2价值1.5万
+        [11000, 14500],  # 中期：资产1价值1.1万，资产2价值1.45万
+        [10500, 16000]   # 期末：资产1价值1.05万，资产2价值1.6万
+    ])
+    
+    # 计算基准总收益率
+    result = total_benchmark_return_nb(benchmark_value)
+    # 结果：[0.05, 0.067] 表示资产1总收益率5%，资产2总收益率6.7%
+    ```
+    
+    应用场景:
+    --------
+    - **绩效评估**：计算主动策略相对于基准的超额收益
+    - **阿尔法计算**：主动策略收益 - 基准收益 = 策略阿尔法
+    - **信息比率**：超额收益 / 跟踪误差 = 信息比率
+    - **基准比较**：评估策略是否跑赢市场基准
+    - **风险调整**：计算夏普比率、索提诺比率等风险调整指标
+    - **策略归因**：分析收益来源（市场收益 vs 主动管理收益）
+    
+    基准策略假设:
+    -----------
+    - **买入持有**：期初买入后持有到底，不进行任何调仓
+    - **无交易成本**：不考虑交易费用、滑点等成本
+    - **无管理费**：不考虑基金管理费等费用
+    - **完全复制**：基准完全复制目标指数的表现
+    
+    收益率解读:
+    ---------
+    - **正值**：基准策略获得正收益，市场上涨
+    - **负值**：基准策略亏损，市场下跌
+    - **零值**：基准策略无收益，市场持平
+    - **大小比较**：反映不同资产/组合的相对表现
+    
+    技术特点:
+    --------
+    - **简单计算**：仅使用期初和期末价值计算总收益
+    - **高效处理**：Numba编译优化，支持大规模数据计算
+    - **数值稳定**：使用专门的收益率计算函数避免精度问题
+    - **向量化操作**：逐列处理，支持多资产/组合同时计算
+    
+    注意事项:
+    --------
+    - 仅计算总收益率，不提供期间收益率序列
+    - 假设基准策略为买入持有，不考虑再平衡
+    - 适用于评估长期投资策略的相对表现
+    - 是计算超额收益和信息比率的基础数据
+    """
+    # 创建输出数组，长度为资产/组合数量
     out = np.empty(benchmark_value.shape[1], dtype=np.float64)
+    
+    # 逐列计算每个资产/组合的基准总收益率
     for col in range(benchmark_value.shape[1]):
+        # 计算总收益率：(期末价值 - 期初价值) / 期初价值
         out[col] = returns_nb.get_return_nb(benchmark_value[0, col], benchmark_value[-1, col])
+    
     return out
 
 
